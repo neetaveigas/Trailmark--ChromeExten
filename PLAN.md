@@ -1,8 +1,5 @@
 #  Trailmark Project Schedule and Execution Plan
 
-
----
-
 ## 1. 10-Day Implementation Roadmap
 
 | Day | Milestone | Objective | Verifiable Working Deliverable |
@@ -15,8 +12,4 @@
 | **Day 7** | **Milestone 3A** | Event Pipeline & Resilience | Full end-to-end integration: `installId` generated and stored in `chrome.storage.local`. Worker safely handles collector downtime without crashing. Scroll & typing burst tracking functional. |
 | **Day 8** | **Milestone 3B** | Extension Popup & Tenant Overrides | Toolbar popup displays active domain, validates 22-char key format, and saves custom domain site keys that override default config keys. |
 | **Day 9** | **Milestone 3C** | Unit Test Suite & Edge Cases | `npm test` runs full suite without browser. Tests verify hostname parsing, dwell math, debouncing, rapid switches (<300ms), and privacy scrubbing. Extension reload handled cleanly. |
-| **Day 10** | **Milestone 4** | Documentation, Polish & Demo Dry Run | `README.md` completed with "What Trailmark collects" table and pasted test output. Clean git history verified. Live demo rehearsed against the script. |
-
-
-
-.
+| **Day 10** | **Milestone 4** | Documentation, Polish & Demo Dry Run | `README.md` completed with "What Trailmark collects" table and pasted test output. Clean git history verified. Live demo rehearsed against the script.
