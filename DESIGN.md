@@ -172,18 +172,54 @@ also check serialized events for these prohibited values.
 
 ## 5. State and service-worker restarts
 
-`installId` is generated on first install and stored in
-`chrome.storage.local`, as required. `browserSessionId`, the active tab,
-hostname metadata, and the active dwell start time are stored in
-`chrome.storage.session`. Session storage survives service-worker restarts but
-is cleared when the browser session ends, which avoids counting time while
-Chrome is closed.
+Because Manifest V3 service workers are ephemeral and terminate after ~30 seconds
+of inactivity, in-memory global variables are cleared whenever the worker goes to
+sleep. State is partitioned across `chrome.storage.local` and
+`chrome.storage.session` to ensure continuity without state fragmentation:
 
-All Chrome event listeners are registered at the top level of the service
-worker. Listener handlers read and update persisted state rather than relying
-on variables that disappear when Chrome stops the worker. A tab never observed
-before can be closed safely; it produces a restricted close event rather than
-an error.
+### Identity & Session Storage Architecture
+
+1. **`installId` (Permanent Local State):**
+   - **Where it lives:** `chrome.storage.local`.
+   - **When created:** Generated once as a random UUID via `crypto.randomUUID()`
+     during extension installation (`chrome.runtime.onInstalled`). It remains
+     constant across service worker restarts, browser updates, and browser sessions.
+
+2. **`browserSessionId` (Session Lifetime State - Resolving Issue #2):**
+   - **Where it lives:** `chrome.storage.session`.
+   - **When created:** Created lazily the first time it is needed by the service
+     worker (e.g., when the first event arrives or a tab listener fires) if it does
+     not already exist in session storage:
+     ```javascript
+     async function getOrCreateSessionId() {
+       const session = await chrome.storage.session.get('browserSessionId');
+       if (session.browserSessionId) {
+         return session.browserSessionId;
+       }
+       const newSessionId = crypto.randomUUID();
+       await chrome.storage.session.set({ browserSessionId: newSessionId });
+       return newSessionId;
+     }
+     ```
+   - **Why `chrome.storage.session`:** It survives service worker idling, restarts,
+     and wake-ups throughout the active browser run. When the user quits or closes
+     the browser entirely, Chrome automatically purges `chrome.storage.session`.
+     Upon the next browser launch, the first event lazily initializes a fresh
+     `browserSessionId`, correctly establishing a single persistent ID per browser session.
+
+3. **Tab & Dwell State (Session State):**
+   - **Where it lives:** `chrome.storage.session`.
+   - **Tracked data:** Active `tabId`, active `hostname`, dwell `startTimeMs`, and
+     tab metadata. Storing this in session storage ensures that if the worker goes
+     to sleep while a user is reading a tab, waking up on the next tab switch
+     correctly computes the full dwell duration without losing the initial timestamp.
+     Time is not counted while Chrome is completely closed because the session storage
+     clears.
+
+All Chrome event listeners are registered synchronously at the top level of the
+service worker. Listener handlers read and update persisted storage rather than
+relying on in-memory variables. A tab never observed before can be closed safely;
+it produces a restricted close event rather than an error.
 
 ## 6. Manifest permissions
 
@@ -267,6 +303,7 @@ the collector uses Node built-ins only.
 | Day 1 | Keep tab/session state in `chrome.storage.session` and the stable install ID in `chrome.storage.local`. | Keep state only in worker variables or persist all state permanently. | Proposed; worker restarts do not lose active dwell state, and closed-browser time is not counted. |
 | Day 1 | Omit page titles unless the mentor resolves the FR-2.2 / NFR-1 conflict. | Always send the page title. | Pending mentor decision; privacy-safe default. |
 | Day 1 | Load shared code without a bundler via ordered `content_scripts.js` array in manifest, service worker `importScripts`, and universal export wrapper (`globalThis`/CommonJS) for Node tests (resolving Issue #1). | Build-time script concatenation (`build.js` bundle) or ES modules with bundler. | Approved; satisfies Chrome's content script module limitation cleanly without introducing bundler dependencies or build artifacts complexity. |
+| Day 1 | Store `browserSessionId` in `chrome.storage.session`, lazily initialized on first access if not present (resolving Issue #2). | Keep `browserSessionId` in service worker memory or persist in `local`. | Approved; worker restarts do not fragment sessions into multiple IDs, and quitting the browser clears the session cleanly. |
 
 Do not begin feature implementation until the mentor has reviewed and approved
 the design and plan.
