@@ -112,8 +112,11 @@ three runtimes as follows:
    subsequent scripts without polluting the web page's window scope.
 
 2. **Service worker (`dist/service-worker.js`):**
-   The service worker executes as a standard background script and loads the
-   shared files at its top level using `importScripts`:
+   The service worker executes as a **classic script** (the default in Manifest V3).
+   The `manifest.json` `background` entry must **not** set `"type": "module"`, because
+   `importScripts()` is only supported in classic service workers in Chrome; setting
+   `"type": "module"` causes `importScripts()` to throw a fatal error and prevents the
+   service worker from starting. At its top level, it loads shared scripts synchronously:
    ```javascript
    importScripts('shared/events.js', 'shared/tracking-logic.js');
    ```
@@ -138,6 +141,38 @@ three runtimes as follows:
    ```
    This allows pure unit tests to run directly with `node --test` without any
    transpilation, bundling, or mock browser globals.
+
+4. **Cross-module dependencies between shared files:**
+   When one shared file depends on another (for example, `tracking-logic.js` using
+   event validation helpers from `events.js`):
+   - **In Node.js (`npm test`):** It resolves the dependency via `require('./events.js')`.
+   - **In the browser (Content Script and Service Worker):** It reads `root.TrailmarkEvents`
+     (or `globalThis.TrailmarkEvents`), which is guaranteed to be initialized because
+     `events.js` is loaded earlier in the execution sequence.
+
+   Example universal wrapper handling cross-file dependencies (`extension/shared/tracking-logic.js`):
+   ```javascript
+   (function (root, factory) {
+     if (typeof module !== 'undefined' && module.exports) {
+       // Node.js test environment
+       const Events = require('./events.js');
+       module.exports = factory(Events);
+     } else {
+       // Browser content script / classic service worker
+       root.TrailmarkTracking = factory(root.TrailmarkEvents);
+     }
+   })(typeof globalThis !== 'undefined' ? globalThis : this, function (Events) {
+     const TrackingLogic = {
+       // logic utilizing Events helper functions...
+     };
+     return TrackingLogic;
+   });
+   ```
+
+   **Strict Dependency Ordering Rule:** Both the `manifest.json` `content_scripts[].js`
+   array and the service worker's `importScripts()` call must list dependencies in
+   topological order (i.e. `events.js` must always be listed before dependent files like
+   `tracking-logic.js`).
 
 ## 4. Event contract
 
@@ -234,6 +269,15 @@ generated from the same `allowedDomains` setting. The localhost collector
 origin is a separate host permission because it is not a website to track.
 There will be no `tabs` permission, and no `activeTab` or `scripting`
 permission unless the approved design changes and the mentor agrees.
+
+### Background Service Worker Configuration
+The service worker is registered in `manifest.json` as a classic script:
+```json
+"background": {
+  "service_worker": "service-worker.js"
+}
+```
+**Important:** Do **not** set `"type": "module"`. In Chrome Manifest V3, `importScripts()` is only valid when the service worker is loaded as a classic script. If `"type": "module"` is added, `importScripts()` throws a runtime error and the extension service worker fails to start.
 
 ## 7. Privacy, security, and reliability rules
 
