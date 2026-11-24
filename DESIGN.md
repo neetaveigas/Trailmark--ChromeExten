@@ -224,18 +224,32 @@ sleep. State is partitioned across `chrome.storage.local` and
    - **Where it lives:** `chrome.storage.session`.
    - **When created:** Created lazily the first time it is needed by the service
      worker (e.g., when the first event arrives or a tab listener fires) if it does
-     not already exist in session storage:
+     not already exist in session storage.
+   - **Race-condition-safe pattern:** When the worker wakes up, Chrome can fire
+     multiple listeners near-simultaneously (e.g., a tab switch and a window focus
+     event). A naive `async` lookup would let each concurrent caller read empty
+     storage, generate its own UUID, and overwrite the previous one — leaving early
+     events with a session ID that no longer exists. The fix is to cache the in-flight
+     promise in a module-level variable so all concurrent callers share the same
+     lookup:
      ```javascript
-     async function getOrCreateSessionId() {
-       const session = await chrome.storage.session.get('browserSessionId');
-       if (session.browserSessionId) {
-         return session.browserSessionId;
-       }
-       const newSessionId = crypto.randomUUID();
-       await chrome.storage.session.set({ browserSessionId: newSessionId });
-       return newSessionId;
+     let sessionIdPromise;
+
+     function getOrCreateSessionId() {
+       sessionIdPromise ??= (async () => {
+         const session = await chrome.storage.session.get('browserSessionId');
+         if (session.browserSessionId) return session.browserSessionId;
+         const id = crypto.randomUUID();
+         await chrome.storage.session.set({ browserSessionId: id });
+         return id;
+       })();
+       return sessionIdPromise;
      }
      ```
+     `sessionIdPromise` is intentionally a worker-lifetime variable — when the worker
+     stops it is cleared, and the next call re-reads the already-persisted ID from
+     `chrome.storage.session`. This is the same serialization principle as handling
+     storage writes one-at-a-time (see Issue #3).
    - **Why `chrome.storage.session`:** It survives service worker idling, restarts,
      and wake-ups throughout the active browser run. When the user quits or closes
      the browser entirely, Chrome automatically purges `chrome.storage.session`.
@@ -346,8 +360,8 @@ the collector uses Node built-ins only.
 | Day 1 | Use Manifest V3, plain JavaScript, Node built-ins, and a local-only collector. | Framework, remote collector, or third-party analytics. | Proposed; matches technical rules and keeps data local. |
 | Day 1 | Keep tab/session state in `chrome.storage.session` and the stable install ID in `chrome.storage.local`. | Keep state only in worker variables or persist all state permanently. | Proposed; worker restarts do not lose active dwell state, and closed-browser time is not counted. |
 | Day 1 | Omit page titles unless the mentor resolves the FR-2.2 / NFR-1 conflict. | Always send the page title. | Pending mentor decision; privacy-safe default. |
-| Day 1 | Load shared code without a bundler via ordered `content_scripts.js` array in manifest, service worker `importScripts`, and universal export wrapper (`globalThis`/CommonJS) for Node tests (resolving Issue #1). | Build-time script concatenation (`build.js` bundle) or ES modules with bundler. | Approved; satisfies Chrome's content script module limitation cleanly without introducing bundler dependencies or build artifacts complexity. |
-| Day 1 | Store `browserSessionId` in `chrome.storage.session`, lazily initialized on first access if not present (resolving Issue #2). | Keep `browserSessionId` in service worker memory or persist in `local`. | Approved; worker restarts do not fragment sessions into multiple IDs, and quitting the browser clears the session cleanly. |
+| Day 1 | Load shared code without a bundler via ordered `content_scripts.js` array in manifest, service worker `importScripts`, and universal export wrapper (`globalThis`/CommonJS) for Node tests (resolving Issue #1). | Build-time script concatenation (`build.js` bundle) or ES modules with bundler. | Proposed; satisfies Chrome's content script module limitation cleanly without introducing bundler dependencies or build artifacts complexity. |
+| Day 1 | Store `browserSessionId` in `chrome.storage.session`, lazily initialized on first access using a promise-cached pattern to prevent race conditions when multiple listeners fire at startup (resolving Issue #2). | Keep `browserSessionId` in service worker memory or persist in `local`. | Proposed; worker restarts do not fragment sessions into multiple IDs, and quitting the browser clears the session cleanly. |
 
 Do not begin feature implementation until the mentor has reviewed and approved
 the design and plan.
