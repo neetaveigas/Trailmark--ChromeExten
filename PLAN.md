@@ -46,7 +46,7 @@ small commits and push progress to the repository at least daily.
 | 5 | Tab activation, closing, restricted hosts, restart-safe dwell time (`FR-5.1-5.3`, `FR-5.6`), and the serial queue for tab/window state updates (Issue #3) | Switch between tabs and close one; show host-only events and dwell time; restricted pages have no hostname; tests cover dwell calculation, closing an unseen tab, and two events arriving together |
 | 6 | Mentor checkpoint and resilience (`FR-3.3`, `FR-4.5`, `NFR-5,6`) | Review progress with mentor; document changes; reload the extension while a test page is open without repeated console errors; confirm operation resumes after refresh |
 | 7 | Scroll and typing bursts, browser focus, and short-tab filtering (`FR-2.5-2.6`, `FR-5.5`, `FR-5.7`) | Show one grouped scroll event per completed scroll, a typing-burst event with counts only, and dwell time pausing outside Chrome; ignore tabs active for less than 300 ms; unit tests cover grouping, focus, and filtering |
-| 8 | Popup and collector summaries (`FR-6.1-6.4`, `FR-7.4`); domain-setting validation (`FR-1.6`) | Save, list, and delete a per-domain site key; invalid key shows an error; events use the domain override; collector displays event counts and dwell totals |
+| 8 | Popup and collector summaries (`FR-6.1-6.4`, `FR-7.4`); domain-setting validation (`FR-1.6`) | Save, list, and delete a per-domain site key; invalid key shows an error; events use the domain override; collector keeps running totals of all events (not just the latest 200), serves them at `GET /summary`, and the dashboard displays event counts and dwell totals |
 | 9 | Stabilization and complete demo rehearsal | Run the full demo flow, required tests, and checks for privacy leaks; complete the README and list any skipped Should items as known issues |
 
 ### Day 10 - Final hand-in and demo
@@ -110,8 +110,21 @@ GitHub repository and share the latest commit with the mentor.
   - `GET /` sends `Content-Security-Policy: default-src 'self'`.
   - `toRowCells()` in `dashboard-format.js` returns plain strings (including
     the malicious `class` unchanged) and handles missing optional fields;
-    `summarize()` returns correct counts per event type and dwell totals per
-    hostname.
+    `toSummaryRows()` turns a summary into plain string rows.
+- Test the collector running totals (Issue #5 review, Issue #6):
+  - Send more than 200 valid events (for example 250, including
+    `tmTabActivated` events with dwell). `GET /events` returns only the
+    latest 200, while `GET /summary` reports `totalEvents: 250`, counts per
+    event type that add up to 250, and dwell totals that include the events
+    no longer in the list.
+  - Rejected `POST`s (`415` or `400`) do not change `GET /summary`.
+  - `GET /summary` has the same headers as `GET /events` (`application/json`,
+    `nosniff`).
+  - Unit tests for `addToSummary()` in `collector/summary.js`: counts per
+    event type; dwell added to `previousHostname`; restricted dwell goes to
+    `restrictedDwellMs`; negative, non-numeric, or missing `previousDwellMs`
+    is ignored; a hostname of `__proto__` is stored as a normal entry; the
+    input summary is not mutated.
   - Manually: store the malicious event, open the dashboard, and confirm the
     string is shown as text and no alert or console CSP violation from
     Trailmark code appears.

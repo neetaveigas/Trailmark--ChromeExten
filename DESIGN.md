@@ -35,6 +35,8 @@ content script              (Manifest V3)
                           - rejects non-JSON POSTs (415)
                           - validates and stores events
                           - serves latest 200 as JSON at GET /events
+                          - keeps running totals of all events,
+                            served as JSON at GET /summary
                           - static dashboard at / builds the table
                             in the browser with textContent
                           - serves a manual test page at /test
@@ -71,10 +73,11 @@ extension/
     serial-queue.js
 collector/
   server.js                 (Node only: HTTP routes, storage, validation)
+  summary.js                (pure: addToSummary(summary, event) running totals)
   public/
     dashboard.html          (static page served at /, no event data inside)
-    dashboard.js            (browser: fetches GET /events, builds the table)
-    dashboard-format.js     (pure: event -> row cell strings, summaries)
+    dashboard.js            (browser: fetches /events and /summary, builds tables)
+    dashboard-format.js     (pure: event/summary -> plain cell strings)
     test-page.html          (manual test page served at /test)
 test/
   events.test.js
@@ -82,6 +85,7 @@ test/
   serial-queue.test.js
   build.test.js
   collector.test.js
+  summary.test.js
   dashboard-format.test.js
 ```
 
@@ -116,26 +120,77 @@ server.**
     tags. It contains no event values.
   - `GET /events` returns the latest 200 stored events, newest first, as
     `Content-Type: application/json`, produced with `JSON.stringify`.
+  - `GET /summary` returns the running totals (below) as
+    `Content-Type: application/json`, with the same headers as `GET /events`.
   - `GET /test` serves the manual test page (it shows no event data).
-- **`dashboard.js` (browser) builds the table.** It calls
-  `fetch('/events')`, parses the JSON, and for each event creates the row and
-  cells with `document.createElement` and sets each value with
+- **`dashboard.js` (browser) builds the tables.** It calls
+  `fetch('/events')` and `fetch('/summary')`, parses the JSON, and builds the
+  event table and the summary tables the same way: rows and cells are
+  created with `document.createElement` and each value is set with
   `cell.textContent = value`. It never uses `innerHTML`, `outerHTML`,
   `insertAdjacentHTML`, `document.write`, `eval`, or `new Function` (NFR-3).
-  It refreshes the table every 2 seconds by clearing the rows with
-  `replaceChildren()` and rebuilding them.
-- **`dashboard-format.js` (pure) turns events into strings.** It exports
-  `toRowCells(event)`, which returns the array of plain strings shown in one
-  row (time, event, siteKey, source, hostname, details), and
-  `summarize(events)`, which returns counts per event type and total dwell
-  time per hostname for FR-7.4. It uses the same universal wrapper as
-  `extension/shared/` (section 3), so `dashboard.html` loads it with a
-  `<script>` tag and Node tests load it with `require()`. Only the small DOM
-  loop in `dashboard.js` is left untested in Node; it is checked by hand.
-- **The FR-7.4 summary** is computed in the browser with `summarize()` on the
-  same 200 events. If it needs all stored events instead, a `GET /summary`
-  JSON route can be added later; it would still be rendered with
-  `textContent`.
+  It refreshes every 2 seconds by clearing the rows with `replaceChildren()`
+  and rebuilding them.
+- **`dashboard-format.js` (pure) turns data into strings.** It exports
+  `toRowCells(event)`, which returns the plain strings shown in one event row
+  (time, event, siteKey, source, hostname, details), and
+  `toSummaryRows(summary)`, which turns the `GET /summary` JSON into rows of
+  plain strings for the two summary tables. It does no counting. It uses the
+  same universal wrapper as `extension/shared/` (section 3), so
+  `dashboard.html` loads it with a `<script>` tag and Node tests load it with
+  `require()`. Only the small DOM loop in `dashboard.js` is left untested in
+  Node; it is checked by hand.
+
+### Collector running totals (FR-7.4; Issue #5 review, Issue #6)
+
+The 200-event list is only a recent window: older events are dropped. The
+FR-7.4 summary (count per event type, total dwell time per website) must
+include **every** valid event the collector has received, so it cannot be
+computed from that list.
+
+- **The collector keeps running totals, separate from the 200-event list.**
+  After a `POST /events` passes the `415` Content-Type check and the `400`
+  required-field check, `server.js` does two independent things: it adds the
+  event to the list (dropping the oldest above 200), and it updates the
+  totals with `summary = addToSummary(summary, event)`. Dropping an event
+  from the list never changes the totals, so they keep growing.
+- **`collector/summary.js` holds the pure logic.** `addToSummary(summary,
+  event) -> summary` returns an updated summary without mutating its input
+  and without I/O, so the server calls it once per event and Node tests call
+  it directly. `createSummary()` returns the empty starting value and
+  `toSummaryJSON(summary)` produces the response body for `GET /summary`. It
+  is a plain CommonJS module, because only Node uses it.
+- **What is counted.**
+  - `countsByEvent`: every valid event adds 1 to the count for its `event`
+    name.
+  - `dwellMsByHostname`: a `tmTabActivated` event adds `previousDwellMs` to
+    the total for `previousHostname`. If later events also report dwell
+    (for example when browser blur ends a dwell period, FR-5.5), they are
+    added the same way and recorded in the event contract (section 4).
+  - Dwell from a restricted previous tab (no hostname) is added to a single
+    `restrictedDwellMs` total, so no time is silently lost or attributed to
+    the wrong website.
+  - `previousDwellMs` is only added if it is a finite number `>= 0`;
+    anything else is ignored for the totals (the event is still counted).
+- **Hostnames are untrusted keys.** Totals are kept in a `Map` (or an
+  object created with `Object.create(null)`), so a hostname such as
+  `__proto__` or `constructor` cannot change object behaviour.
+- **Response shape** (`GET /summary`):
+  ```json
+  {
+    "totalEvents": 1234,
+    "countsByEvent": [{ "event": "tmClick", "count": 812 }],
+    "dwellMsByHostname": [{ "hostname": "example.com", "dwellMs": 523000 }],
+    "restrictedDwellMs": 41000
+  }
+  ```
+  Arrays are used rather than objects keyed by hostname, so the browser
+  never treats data as object keys. Counts are sorted by event name and
+  dwell totals by `dwellMs`, largest first.
+- **Lifetime.** Like the event list, the totals are kept in memory (FR-7.3
+  allows memory or a file) and reset when the collector restarts. If events
+  are later stored in a file, the totals are rebuilt at startup by running
+  `addToSummary` over every stored event.
 
 **Defense in depth.**
 
@@ -145,12 +200,14 @@ server.**
   `onerror=`) are blocked. Even if markup were injected by mistake, it could
   not run.
 - Every collector response sets `X-Content-Type-Options: nosniff`, so the
-  browser never treats the JSON from `GET /events` as HTML or script.
+  browser never treats the JSON from `GET /events` or `GET /summary` as HTML
+  or script.
 - Because the collector sends no CORS headers (section 6, Issue #4), other
-  websites cannot read `GET /events`. The event log can only be read by pages
-  served from `http://localhost:4317` and by tools such as `curl`.
+  websites cannot read `GET /events` or `GET /summary`. The event log and
+  totals can only be read by pages served from `http://localhost:4317` and by
+  tools such as `curl`.
 - The `415` Content-Type rule (section 6) applies only to `POST /events`; the
-  dashboard's `GET /events` request is unaffected.
+  dashboard's `GET /events` and `GET /summary` requests are unaffected.
 - The content script sends nothing on the collector origin except on `/test`
   (section 8, open question 5), so using the dashboard does not create events
   about itself.
@@ -619,7 +676,8 @@ the collector uses Node built-ins only.
 | Day 2 | The build always adds `http://localhost:4317/*` to `host_permissions` (never to content-script `matches`), for every tenant including `["*"]`; the collector sends no CORS headers (addressing Issue #4). | Collector sends `Access-Control-Allow-Origin` and answers `OPTIONS`; rely on `*://*/*` covering localhost. | Approved by mentor in the Issue #4 review, conditional on the `Content-Type` rule below; works for tenants with short domain lists and needs no CORS support in the collector. |
 | Day 2 | Correction from mentor review (Issue #4): the collector rejects any `POST /events` whose `Content-Type` is not `application/json` with `415 Unsupported Media Type` and stores nothing. The earlier claim that leaving out CORS headers alone blocks page POSTs was only half true: `text/plain` and form posts are simple requests with no preflight, so the browser still delivers them. | Rely on missing CORS headers alone; check the `Origin` header instead. | Approved by mentor; together with no CORS headers it stops web pages from posting fake events, and the extension already sends `application/json`. |
 | Day 2 | Content script sends nothing on the collector origin except on `/test` (Issue #4, open question 5). | Serve the test page from a separate port. | Approved by mentor for now; revisit when the collector moves to its own repository (Issue #8). |
-| Day 2 | Build the collector dashboard table in the browser: `server.js` serves a static `dashboard.html` and returns the latest 200 events as JSON from `GET /events`; `dashboard.js` builds rows with `createElement` and `textContent`; pure formatting and summaries live in `dashboard-format.js`; dashboard served with `Content-Security-Policy: default-src 'self'` and `X-Content-Type-Options: nosniff` (Issue #5). | Generate the HTML in Node and escape `& < > " '` in every value; the earlier draft's server-side `textContent` (not possible in Node). | Proposed, pending mentor review; values are plain text by construction (NFR-3), formatting stays testable in Node, and the CSP blocks inline script even if markup slips through. |
+| Day 2 | Build the collector dashboard table in the browser: `server.js` serves a static `dashboard.html` and returns the latest 200 events as JSON from `GET /events`; `dashboard.js` builds rows with `createElement` and `textContent`; pure formatting lives in `dashboard-format.js`; dashboard served with `Content-Security-Policy: default-src 'self'` and `X-Content-Type-Options: nosniff` (Issue #5). | Generate the HTML in Node and escape `& < > " '` in every value; the earlier draft's server-side `textContent` (not possible in Node). | Approved by mentor in the Issue #5 review, conditional on the running-totals change below; values are plain text by construction (NFR-3), formatting stays testable in Node, and the CSP blocks inline script even if markup slips through. |
+| Day 2 | Correction from mentor review (Issue #5; also Issue #6): the collector keeps running totals (count per event type, dwell per hostname) separate from the 200-event list, updated once per valid event with the pure `addToSummary(summary, event)` in `collector/summary.js`, and served as JSON from `GET /summary`, which the dashboard renders with `textContent`. | Compute the summary in the browser from the latest 200 events (earlier draft), which undercounts once older events are dropped. | Pending mentor review; FR-7.4 totals include every event, and the counting logic is a pure function tested in Node. |
 
 Do not begin feature implementation until the mentor has reviewed and approved
 the design and plan.
