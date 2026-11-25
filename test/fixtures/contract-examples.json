@@ -1,0 +1,148 @@
+{
+  "contractVersion": 1,
+  "description": "One valid example of every Trailmark event type. The same file lives in Trailmark--ChromeExten and trailmark-collector; see DESIGN.md section 4 in Trailmark--ChromeExten. Change both copies together.",
+  "events": [
+    {
+      "event": "tmPageView",
+      "siteKey": "tmTestSiteKey_0123-abc",
+      "installId": "3f1c2a9e-6b7d-4e21-9a5f-1c2d3e4f5a6b",
+      "browserSessionId": "8a7b6c5d-4e3f-4a1b-9c8d-7e6f5a4b3c2d",
+      "collectedAt": "2026-11-26T09:00:00.000Z",
+      "sentAt": "2026-11-26T09:00:00.050Z",
+      "source": "page",
+      "path": "/settings",
+      "referrerHostname": "example.com"
+    },
+    {
+      "event": "tmClick",
+      "siteKey": "tmTestSiteKey_0123-abc",
+      "installId": "3f1c2a9e-6b7d-4e21-9a5f-1c2d3e4f5a6b",
+      "browserSessionId": "8a7b6c5d-4e3f-4a1b-9c8d-7e6f5a4b3c2d",
+      "collectedAt": "2026-11-26T09:00:05.000Z",
+      "sentAt": "2026-11-26T09:00:05.040Z",
+      "source": "page",
+      "tag": "button",
+      "id": "save",
+      "name": "save",
+      "class": "btn primary",
+      "type": "submit"
+    },
+    {
+      "event": "tmScroll",
+      "siteKey": "tmTestSiteKey_0123-abc",
+      "installId": "3f1c2a9e-6b7d-4e21-9a5f-1c2d3e4f5a6b",
+      "browserSessionId": "8a7b6c5d-4e3f-4a1b-9c8d-7e6f5a4b3c2d",
+      "collectedAt": "2026-11-26T09:00:08.000Z",
+      "sentAt": "2026-11-26T09:00:08.200Z",
+      "source": "page",
+      "direction": "down",
+      "duration": 640,
+      "startPosition": 0,
+      "endPosition": 1200
+    },
+    {
+      "event": "tmTypingBurst",
+      "siteKey": "tmTestSiteKey_0123-abc",
+      "installId": "3f1c2a9e-6b7d-4e21-9a5f-1c2d3e4f5a6b",
+      "browserSessionId": "8a7b6c5d-4e3f-4a1b-9c8d-7e6f5a4b3c2d",
+      "collectedAt": "2026-11-26T09:00:12.000Z",
+      "sentAt": "2026-11-26T09:00:13.100Z",
+      "source": "page",
+      "keyCount": 14,
+      "duration": 2300
+    },
+    {
+      "event": "tmTabActivated",
+      "siteKey": "tmTestSiteKey_0123-abc",
+      "installId": "3f1c2a9e-6b7d-4e21-9a5f-1c2d3e4f5a6b",
+      "browserSessionId": "8a7b6c5d-4e3f-4a1b-9c8d-7e6f5a4b3c2d",
+      "collectedAt": "2026-11-26T09:01:00.000Z",
+      "sentAt": "2026-11-26T09:01:00.030Z",
+      "source": "worker",
+      "tabId": 412,
+      "hostname": "docs.example.com",
+      "previousTabId": 405,
+      "previousHostname": "example.com",
+      "previousDwellMs": 60000
+    },
+    {
+      "event": "tmTabActivated",
+      "siteKey": "tmTestSiteKey_0123-abc",
+      "installId": "3f1c2a9e-6b7d-4e21-9a5f-1c2d3e4f5a6b",
+      "browserSessionId": "8a7b6c5d-4e3f-4a1b-9c8d-7e6f5a4b3c2d",
+      "collectedAt": "2026-11-26T09:02:00.000Z",
+      "sentAt": "2026-11-26T09:02:00.030Z",
+      "source": "worker",
+      "tabId": 418,
+      "restricted": true,
+      "previousTabId": 412,
+      "previousHostname": "docs.example.com",
+      "previousDwellMs": 60000
+    },
+    {
+      "event": "tmTabActivated",
+      "siteKey": "tmTestSiteKey_0123-abc",
+      "installId": "3f1c2a9e-6b7d-4e21-9a5f-1c2d3e4f5a6b",
+      "browserSessionId": "8a7b6c5d-4e3f-4a1b-9c8d-7e6f5a4b3c2d",
+      "collectedAt": "2026-11-26T09:03:00.000Z",
+      "sentAt": "2026-11-26T09:03:00.030Z",
+      "source": "worker",
+      "tabId": 405,
+      "hostname": "example.com",
+      "previousTabId": 418,
+      "previousRestricted": true,
+      "previousDwellMs": 60000
+    },
+    {
+      "event": "tmTabActivated",
+      "siteKey": "tmTestSiteKey_0123-abc",
+      "installId": "3f1c2a9e-6b7d-4e21-9a5f-1c2d3e4f5a6b",
+      "browserSessionId": "8a7b6c5d-4e3f-4a1b-9c8d-7e6f5a4b3c2d",
+      "collectedAt": "2026-11-26T08:59:00.000Z",
+      "sentAt": "2026-11-26T08:59:00.030Z",
+      "source": "worker",
+      "tabId": 405,
+      "hostname": "example.com"
+    },
+    {
+      "event": "tmTabClosed",
+      "siteKey": "tmTestSiteKey_0123-abc",
+      "installId": "3f1c2a9e-6b7d-4e21-9a5f-1c2d3e4f5a6b",
+      "browserSessionId": "8a7b6c5d-4e3f-4a1b-9c8d-7e6f5a4b3c2d",
+      "collectedAt": "2026-11-26T09:04:00.000Z",
+      "sentAt": "2026-11-26T09:04:00.020Z",
+      "source": "worker",
+      "tabId": 412,
+      "hostname": "docs.example.com"
+    },
+    {
+      "event": "tmTabClosed",
+      "siteKey": "tmTestSiteKey_0123-abc",
+      "installId": "3f1c2a9e-6b7d-4e21-9a5f-1c2d3e4f5a6b",
+      "browserSessionId": "8a7b6c5d-4e3f-4a1b-9c8d-7e6f5a4b3c2d",
+      "collectedAt": "2026-11-26T09:05:00.000Z",
+      "sentAt": "2026-11-26T09:05:00.020Z",
+      "source": "worker",
+      "tabId": 418,
+      "restricted": true
+    },
+    {
+      "event": "tmBrowserBlur",
+      "siteKey": "tmTestSiteKey_0123-abc",
+      "installId": "3f1c2a9e-6b7d-4e21-9a5f-1c2d3e4f5a6b",
+      "browserSessionId": "8a7b6c5d-4e3f-4a1b-9c8d-7e6f5a4b3c2d",
+      "collectedAt": "2026-11-26T09:06:00.000Z",
+      "sentAt": "2026-11-26T09:06:00.020Z",
+      "source": "worker"
+    },
+    {
+      "event": "tmBrowserFocus",
+      "siteKey": "tmTestSiteKey_0123-abc",
+      "installId": "3f1c2a9e-6b7d-4e21-9a5f-1c2d3e4f5a6b",
+      "browserSessionId": "8a7b6c5d-4e3f-4a1b-9c8d-7e6f5a4b3c2d",
+      "collectedAt": "2026-11-26T09:08:00.000Z",
+      "sentAt": "2026-11-26T09:08:00.020Z",
+      "source": "worker"
+    }
+  ]
+}

@@ -8,6 +8,20 @@ script creates the Manifest V3 extension in `dist/`. The extension sends data
 only to `http://localhost:4317`; it does not send anything to an external
 service.
 
+The parts live in **two GitHub repositories** (Issue #8):
+
+| Repository | Contains |
+| --- | --- |
+| [`Trailmark--ChromeExten`](https://github.com/neetaveigas/Trailmark--ChromeExten) (this one) | The extension (content script, service worker, popup), the build script, extension tests, and this `DESIGN.md` and `PLAN.md` |
+| [`trailmark-collector`](https://github.com/neetaveigas/trailmark-collector) | The Node collector server, its dashboard and manual test page, its tests, and its own `README.md` and `package.json` |
+
+They run in different places and change for different reasons. The only
+thing they share is the **event contract** in section 4: what the extension
+sends and what the collector accepts and returns. This document remains the
+design for the whole system, including the collector; the collector
+repository's README covers how to install and start it, its endpoints, and
+the event fields it expects, and links back to section 4.
+
 The extension records limited interaction metadata. It must not collect typed
 or displayed text, passwords, clipboard contents, pressed-key values, full
 URLs, query strings, or tab titles.
@@ -15,6 +29,8 @@ URLs, query strings, or tab titles.
 ## 2. Components and event flow
 
 ```text
+======== Repository: Trailmark--ChromeExten (extension) ========
+
 trailmark.config.json (name, description, version, siteKey, allowedDomains)
 + manifest template
                   |
@@ -28,10 +44,16 @@ content script              (Manifest V3)
   - no text/password data    - adds common event fields
                              - tracks tab/dwell state
                              - persists state in chrome.storage
-                             - POST /events
+                             - POST /events (application/json)
                                       |
+- - - - - - - - - - - - - - - - - - - | - - - - - - - - - - - - - -
+      event contract (section 4):     |   the only link between
+      fields, endpoints, responses    |   the two repositories
+- - - - - - - - - - - - - - - - - - - | - - - - - - - - - - - - - -
                                       v
-                          Local Node collector :4317
+======== Repository: trailmark-collector (collector) ========
+
+                          Local Node collector :4317 (npm start)
                           - rejects non-JSON POSTs (415)
                           - validates and stores events
                           - serves latest 200 as JSON at GET /events
@@ -57,10 +79,18 @@ the hostname. It never sends a full address.
 
 ## 3. Planned file layout
 
+The two repositories are cloned side by side in the same parent folder (for
+example `D:\TRAILMARK` and `D:\trailmark-collector`). Neither imports code
+from the other.
+
+**`Trailmark--ChromeExten` (this repository, the extension):**
+
 ```text
 trailmark.config.json
 manifest.template.json
-package.json
+package.json                (build, test, and collector scripts; see below)
+README.md                   (links to the collector repository)
+DESIGN.md, PLAN.md
 scripts/
   build.js
 extension/
@@ -71,23 +101,44 @@ extension/
     events.js
     tracking-logic.js
     serial-queue.js
-collector/
-  server.js                 (Node only: HTTP routes, storage, validation)
-  summary.js                (pure: addToSummary(summary, event) running totals)
-  public/
-    dashboard.html          (static page served at /, no event data inside)
-    dashboard.js            (browser: fetches /events and /summary, builds tables)
-    dashboard-format.js     (pure: event/summary -> plain cell strings)
-    test-page.html          (manual test page served at /test)
 test/
   events.test.js
   tracking-logic.test.js
   serial-queue.test.js
   build.test.js
-  collector.test.js
+  contract.test.js          (built events match the contract examples)
+  fixtures/
+    contract-examples.json  (same file as in trailmark-collector)
+```
+
+**`trailmark-collector` (separate repository, the collector):**
+
+```text
+package.json                (npm start / npm run collector, npm test)
+README.md                   (install/start, endpoints, expected event fields)
+server.js                   (Node only: HTTP routes, storage, validation)
+summary.js                  (pure: addToSummary(summary, event) running totals)
+public/
+  dashboard.html            (static page served at /, no event data inside)
+  dashboard.js              (browser: fetches /events and /summary, builds tables)
+  dashboard-format.js       (pure: event/summary -> plain cell strings)
+  test-page.html            (manual test page served at /test)
+test/
+  collector.test.js         (HTTP routes, 415/400, headers)
   summary.test.js
   dashboard-format.test.js
+  contract.test.js          (every contract example is accepted)
+  fixtures/
+    contract-examples.json  (same file as in this repository)
 ```
+
+**Commands.** This repository's `npm run build` and `npm test` cover only the
+extension. Its `npm run collector` runs
+`npm --prefix ../trailmark-collector start`, so the FR-1.5 command still
+works from here as long as both repositories are cloned side by side. In
+`trailmark-collector`, `npm start` (also `npm run collector`) starts the
+collector at `http://localhost:4317`, and `npm test` runs the collector
+tests.
 
 The build script fills the manifest template and injects the configured site
 key into generated extension code. `dist/` is generated output, not source.
@@ -116,10 +167,15 @@ Pure functions in `extension/shared/` will handle URL-to-hostname parsing,
 event validation, dwell-time calculations, scroll/typing burst grouping, and
 the serial queue that processes tab/window events one at a time (section 5).
 The Node built-in test runner can test these modules without Chrome. Browser
-API wiring stays in the service worker and content script; collector request
-handling is tested through Node's HTTP interface.
+API wiring stays in the service worker and content script. Collector request
+handling is tested through Node's HTTP interface in the `trailmark-collector`
+repository.
 
-### Collector dashboard rendering (Issue #5)
+The next two subsections describe the collector's design. The code lives in
+`trailmark-collector`; file paths there are relative to that repository's
+root.
+
+### Collector dashboard rendering (Issue #5; in `trailmark-collector`)
 
 **Problem.** An earlier draft said the collector generates the dashboard
 HTML on the server and uses `textContent` to stay XSS-safe. `textContent` and
@@ -132,7 +188,7 @@ string arrives in a `tmClick` event as data.
 server.**
 
 - **`server.js` (Node) never builds HTML from event data.** It serves three
-  fixed files from `collector/public/` and returns event data only as JSON:
+  fixed files from `public/` and returns event data only as JSON:
   - `GET /` serves `dashboard.html`, a static page with an empty table and
     `<script src="/dashboard-format.js">` and `<script src="/dashboard.js">`
     tags. It contains no event values.
@@ -154,12 +210,12 @@ server.**
   (time, event, siteKey, source, hostname, details), and
   `toSummaryRows(summary)`, which turns the `GET /summary` JSON into rows of
   plain strings for the two summary tables. It does no counting. It uses the
-  same universal wrapper as `extension/shared/` (section 3), so
+  same universal wrapper pattern as `extension/shared/` (section 3), so
   `dashboard.html` loads it with a `<script>` tag and Node tests load it with
   `require()`. Only the small DOM loop in `dashboard.js` is left untested in
   Node; it is checked by hand.
 
-### Collector running totals (FR-7.4; Issue #5 review, Issue #6)
+### Collector running totals (FR-7.4; Issue #5 review, Issue #6; in `trailmark-collector`)
 
 The 200-event list is only a recent window: older events are dropped. The
 FR-7.4 summary (count per event type, total dwell time per website) must
@@ -172,7 +228,7 @@ computed from that list.
   event to the list (dropping the oldest above 200), and it updates the
   totals with `summary = addToSummary(summary, event)`. Dropping an event
   from the list never changes the totals, so they keep growing.
-- **`collector/summary.js` holds the pure logic.** `addToSummary(summary,
+- **`summary.js` holds the pure logic.** `addToSummary(summary,
   event) -> summary` returns an updated summary without mutating its input
   and without I/O, so the server calls it once per event and Node tests call
   it directly. `createSummary()` returns the empty starting value and
@@ -349,7 +405,30 @@ popup, and Node tests as follows:
    `popup.js` reads `globalThis.TrailmarkEvents`, exactly like the content
    script. Node tests cover `isValidSiteKey` through `require()`.
 
-## 4. Event contract
+## 4. Event contract (between the two repositories)
+
+This section is the **contract between `Trailmark--ChromeExten` and
+`trailmark-collector`** (Issue #8). The extension promises to send only events
+in this shape; the collector promises to accept them and to respond as
+described in "HTTP interface" below. Neither side may change the contract
+alone.
+
+**How the two sides stay in agreement.**
+
+- This section is the single written source of the contract. The collector's
+  README summarizes the fields it expects and links here.
+- Both repositories keep an identical copy of
+  `test/fixtures/contract-examples.json`: one valid example of every event
+  type, plus a `contractVersion` number. The extension's `contract.test.js`
+  checks that the events it builds have exactly these fields; the collector's
+  `contract.test.js` checks that `POST /events` accepts every example.
+- A contract change bumps `contractVersion`, updates this section, and updates
+  the fixture file in **both** repositories on the same day, with a
+  Decisions log entry. If the two fixture files differ, the change is not
+  finished.
+- The current contract is **version 1**.
+
+### Event fields
 
 Every event sent to the collector has these common fields:
 
@@ -367,10 +446,10 @@ Planned event-specific fields:
 
 | Event | Additional fields |
 | --- | --- |
-| `tmPageView` | Path without query or fragment; referring page hostname only. The required page-title field is on hold pending the privacy decision in section 8. |
-| `tmClick` | Target tag, `id`, `name`, `class`, and `type`; never text or value |
-| `tmScroll` (Should) | Direction, duration, start position, end position; close a burst after 150 ms without scrolling or when direction changes |
-| `tmTypingBurst` (Should) | Key count and duration only; group key presses less than 1 second apart; never key values |
+| `tmPageView` | `path` (no query or fragment); `referrerHostname` (hostname only; omitted when there is no referrer). The required page-title field is on hold pending the privacy decision in section 8. |
+| `tmClick` | `tag`, `id`, `name`, `class`, and `type` of the clicked element (each omitted when empty); never text or value |
+| `tmScroll` (Should) | `direction` (`up` or `down`), `duration` (ms), `startPosition` and `endPosition` (px); close a burst after 150 ms without scrolling or when direction changes |
+| `tmTypingBurst` (Should) | `keyCount` and `duration` (ms) only; group key presses less than 1 second apart; never key values |
 | `tmTabActivated` | New tab: `tabId`, and either `hostname` or `restricted: true` (no hostname). Previous tab: `previousTabId`, `previousDwellMs`, and either `previousHostname` or `previousRestricted: true` (no previous hostname). See the rules below. |
 | `tmTabClosed` | `tabId`, and either the last known `hostname` or `restricted: true` with no hostname |
 | `tmBrowserBlur` (Should) | Common fields only. No page or URL details and no `timestamp` field; the time is `collectedAt`. |
@@ -401,6 +480,34 @@ would only repeat them.
 No event contains a full URL, query string, fragment, page text, input value,
 password data, clipboard data, or tab title. The implementation and tests will
 also check serialized events for these prohibited values.
+
+### HTTP interface (collector side of the contract)
+
+The collector listens on `http://localhost:4317`. This URL is a single
+constant in the extension's `scripts/build.js` (section 6).
+
+| Request | Response |
+| --- | --- |
+| `POST /events` with `Content-Type: application/json` and one event as the body | `204 No Content` when the event is stored |
+| `POST /events` whose `Content-Type` media type is not `application/json`, or is missing | `415 Unsupported Media Type`; body not parsed, nothing stored (section 6) |
+| `POST /events` whose body is not valid JSON, is not a single object, or lacks a string `event`, a string `siteKey`, or an ISO date string `collectedAt` (FR-7.2) | `400 Bad Request`; nothing stored |
+| `POST /events` with a body larger than 64 KB | `413 Payload Too Large`; nothing stored |
+| `GET /events` | `200`, `application/json`: array of the latest 200 events, newest first, exactly as received |
+| `GET /summary` | `200`, `application/json`: running totals of every stored event (section 3, "Collector running totals") |
+| `GET /` | `200`, the static dashboard page |
+| `GET /test` | `200`, the manual test page |
+| Anything else | `404 Not Found` |
+
+Error responses (`400`, `413`, `415`) have a JSON body
+`{ "error": "<short reason>" }` that never repeats event values. Every
+response sets `X-Content-Type-Options: nosniff`, and no response sends CORS
+headers (section 6).
+
+The collector checks only the fields it needs (FR-7.2) and stores the event
+as received. It does not reject unknown event names or extra fields, so a
+newer extension does not break an older collector; the extension's own
+validation (NFR-4) and the contract tests are what keep the fields in line
+with this section.
 
 ## 5. State and service-worker restarts
 
@@ -668,7 +775,8 @@ The service worker is registered in `manifest.json` as a classic script:
 - **NFR-3:** Do not use `eval`, `new Function`, or `innerHTML` with event data.
   The collector server never builds HTML from event data; it returns events
   as JSON from `GET /events`. The dashboard table is built in the browser by
-  `collector/public/dashboard.js`, which creates DOM elements explicitly and
+  `public/dashboard.js` in the `trailmark-collector` repository, which creates
+  DOM elements explicitly and
   sets every value with `textContent`. The dashboard is served with
   `Content-Security-Policy: default-src 'self'` and all responses with
   `X-Content-Type-Options: nosniff` (section 3, Issue #5).
@@ -715,6 +823,10 @@ the collector uses Node built-ins only.
    script into the collector's own dashboard at `/`. Agreed default: the
    content script sends nothing on the collector origin except on the `/test`
    path. Revisit when the collector moves to its own repository (Issue #8).
+   *Revisited for Issue #8:* moving the collector code to its own repository
+   does not change where it runs. It is still served from
+   `http://localhost:4317`, with the dashboard at `/` and the test page at
+   `/test`, so the agreed default still applies unchanged.
 
 ### Risks and responses
 
@@ -732,6 +844,17 @@ the collector uses Node built-ins only.
   missing receiver without repeated logging; refresh the page to reconnect.
 - **Schedule pressure:** Preserve every Must requirement and required test.
   The plan lists optional features to defer first.
+- **The two repositories drift apart (Issue #8):** the extension could start
+  sending a field the collector does not expect, or the collector could
+  change a response the dashboard relies on. Response: section 4 is the one
+  written contract, both repositories test against the same
+  `contract-examples.json`, and any change bumps `contractVersion` and updates
+  both repositories on the same day. During the demo, both repositories'
+  `npm test` runs are shown.
+- **The collector repository is not cloned next to the extension:** then
+  `npm run collector` from this repository cannot find it. Response: this
+  README and `PLAN.md` give the side-by-side clone steps, and the collector
+  can always be started with `npm start` from its own folder.
 
 ### Decisions log
 
@@ -747,8 +870,9 @@ the collector uses Node built-ins only.
 | Day 2 | Correction from mentor review (Issue #4): the collector rejects any `POST /events` whose `Content-Type` is not `application/json` with `415 Unsupported Media Type` and stores nothing. The earlier claim that leaving out CORS headers alone blocks page POSTs was only half true: `text/plain` and form posts are simple requests with no preflight, so the browser still delivers them. | Rely on missing CORS headers alone; check the `Origin` header instead. | Approved by mentor; together with no CORS headers it stops web pages from posting fake events, and the extension already sends `application/json`. |
 | Day 2 | Content script sends nothing on the collector origin except on `/test` (Issue #4, open question 5). | Serve the test page from a separate port. | Approved by mentor for now; revisit when the collector moves to its own repository (Issue #8). |
 | Day 2 | Build the collector dashboard table in the browser: `server.js` serves a static `dashboard.html` and returns the latest 200 events as JSON from `GET /events`; `dashboard.js` builds rows with `createElement` and `textContent`; pure formatting lives in `dashboard-format.js`; dashboard served with `Content-Security-Policy: default-src 'self'` and `X-Content-Type-Options: nosniff` (Issue #5). | Generate the HTML in Node and escape `& < > " '` in every value; the earlier draft's server-side `textContent` (not possible in Node). | Approved by mentor in the Issue #5 review, conditional on the running-totals change below; values are plain text by construction (NFR-3), formatting stays testable in Node, and the CSP blocks inline script even if markup slips through. |
-| Day 2 | Correction from mentor review (Issue #5; also Issue #6): the collector keeps running totals (count per event type, dwell per hostname) separate from the 200-event list, updated once per valid event with the pure `addToSummary(summary, event)` in `collector/summary.js`, and served as JSON from `GET /summary`, which the dashboard renders with `textContent`. | Compute the summary in the browser from the latest 200 events (earlier draft), which undercounts once older events are dropped. | Pending mentor review; FR-7.4 totals include every event, and the counting logic is a pure function tested in Node. |
+| Day 2 | Correction from mentor review (Issue #5; also Issue #6): the collector keeps running totals (count per event type, dwell per hostname) separate from the 200-event list, updated once per valid event with the pure `addToSummary(summary, event)` in `summary.js`, and served as JSON from `GET /summary`, which the dashboard renders with `textContent`. | Compute the summary in the browser from the latest 200 events (earlier draft), which undercounts once older events are dropped. | Pending mentor review; FR-7.4 totals include every event, and the counting logic is a pure function tested in Node. |
 | Day 2 | Smaller fixes from the design review (Issue #6): `tmTabActivated` carries separate `restricted` (new tab) and `previousRestricted` (previous tab) flags; dwell state lives only in `chrome.storage.session` with no `chrome.storage.local` fallback; no event has a `timestamp` field (`collectedAt` covers it); `build.js` copies `extension/shared/` to `dist/shared/` and checks every manifest file exists; the popup loads `shared/events.js` with an external `<script>` tag before `popup.js` and uses the shared `isValidSiteKey()`. | One shared `restricted` flag; falling back to local storage; a separate `timestamp`; a popup with its own copy of the site-key check. | Pending mentor review; the collector can tell which tab was hidden, stale dwell state cannot survive a browser restart, the extension loads from `dist/`, and the popup and worker validate site keys the same way. |
+| Day 2 | Move the collector to its own repository, `trailmark-collector` (Issue #8). Section 4 becomes the versioned contract between the repositories (event fields plus the collector's HTTP interface), checked by an identical `contract-examples.json` in both test suites. This repository's `npm run collector` starts the collector from `../trailmark-collector`. | Keep the collector in this repository under `collector/`; publish the contract as a shared npm package. | Pending mentor review; the two parts run in different places and change for different reasons, the contract becomes explicit, and no shared package or extra dependency is needed. |
 
 Do not begin feature implementation until the mentor has reviewed and approved
 the design and plan.
