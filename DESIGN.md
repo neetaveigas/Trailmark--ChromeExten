@@ -32,6 +32,7 @@ content script              (Manifest V3)
                                       |
                                       v
                           Local Node collector :4317
+                          - rejects non-JSON POSTs (415)
                           - validates and stores events
                           - displays latest 200 at /
                           - serves a manual test page at /test
@@ -41,8 +42,9 @@ For a click, the content script reads only the target's tag, `id`, `name`,
 `class`, and `type`; it never reads the target's text or value. It sends a
 Trailmark-shaped message using `chrome.runtime.sendMessage`. The service worker
 checks the message shape, adds shared fields and sends JSON with `fetch` to the
-collector. The collector validates the required fields, stores valid events,
-and shows them on its local page.
+collector, always with `Content-Type: application/json`. The collector rejects
+any `POST /events` that is not `application/json` (section 6), validates the
+required fields, stores valid events, and shows them on its local page.
 
 Tab events start in top-level `chrome.tabs` listeners in the service worker.
 The worker resolves a hostname only when Chrome grants access through the
@@ -420,8 +422,33 @@ domain syntax still to be confirmed in open question 2, section 8.)
 `OPTIONS` preflight requests with CORS approval. An extension service worker
 with host permission is not subject to CORS, so the headers are unnecessary.
 Adding them would also let any web page the user visits POST fake events to
-the collector, which works against FR-3.2 and NFR-4. Without them, a page's
-cross-origin JSON POST fails its preflight and is blocked by the browser.
+the collector, which works against FR-3.2 and NFR-4.
+
+**Leaving out CORS headers is not enough on its own.** Without CORS approval,
+the browser only blocks requests that need a preflight:
+
+- A page that POSTs with `Content-Type: application/json` triggers a
+  preflight. The collector gives no CORS approval, so the browser never sends
+  the POST.
+- A page can send the same JSON body as `Content-Type: text/plain`, or as a
+  form post (`application/x-www-form-urlencoded` or `multipart/form-data`).
+  These are "simple requests": there is **no preflight**, and the browser
+  still delivers the request to the collector. The page only loses the
+  ability to read the response.
+
+**Collector rule: reject any `POST /events` that is not JSON.** The collector
+checks the `Content-Type` header before reading the body. If its media type
+(ignoring parameters such as `; charset=utf-8`, compared case-insensitively)
+is not `application/json`, the collector replies `415 Unsupported Media Type`,
+does not parse the body, and stores nothing. A missing `Content-Type` is
+rejected the same way. Only after this check does the collector parse the
+JSON and apply the required-field validation (FR-7.2, `400` on failure).
+
+Together, the two rules close the gap: a web page cannot send
+`application/json` without a preflight, the preflight gets no CORS approval,
+and every request type that skips the preflight is rejected with `415`. The
+extension is unaffected, because the service worker always sends
+`Content-Type: application/json` and has host permission for the collector.
 
 ### Background Service Worker Configuration
 The service worker is registered in `manifest.json` as a classic script:
@@ -447,8 +474,9 @@ The service worker is registered in `manifest.json` as a classic script:
 - **NFR-4:** Validate message type, event name, source, and permitted field
   types in the service worker before forwarding a page message. Check the
   extension sender and accept only the known Trailmark event names and their
-  whitelisted fields. The collector independently validates its required
-  event fields.
+  whitelisted fields. The collector independently rejects any `POST /events`
+  whose `Content-Type` is not `application/json` (`415`), sends no CORS
+  headers (section 6), and validates its required event fields (`400`).
 - **NFR-5:** Check `chrome.runtime.lastError` in callback-based Chrome API
   calls. Handle rejected API calls and failed collector requests with a clear
   log; do not let an individual send crash the worker.
@@ -475,16 +503,17 @@ the collector uses Node built-ins only.
 3. **Day 1 repository:** Create a GitHub repository and send its link to
    `@Jesudas Lobo` on Slack as required. Confirm whether the mentor expects a
    different schedule if the work is part-time.
-4. **Collector access approach (Issue #4):** Confirm the choice in section 6
-   to always add `http://localhost:4317/*` to `host_permissions` at build
-   time, and to send no CORS headers from the collector.
-5. **Tracking the local test page:** The manual test page is served at
-   `http://localhost:4317/test`, so the demo tenant needs `localhost` in
-   `allowedDomains`. That also injects the content script into the
-   collector's own dashboard at `/`, where clicks would create new events
-   about the event list. Proposed default: the content script sends nothing
-   on the collector origin except on the `/test` path. Confirm this, or
-   whether the test page should be served from a separate port.
+4. **Collector access approach (Issue #4):** *Resolved by mentor.* Approved
+   once the `Content-Type` rule was added: always add
+   `http://localhost:4317/*` to `host_permissions` (never to `matches`), send
+   no CORS headers, and reject any non-JSON `POST /events` with `415`. See
+   section 6 and the Decisions log.
+5. **Tracking the local test page:** *Resolved by mentor for now.* The manual
+   test page is served at `http://localhost:4317/test`, so the demo tenant
+   needs `localhost` in `allowedDomains`, which also injects the content
+   script into the collector's own dashboard at `/`. Agreed default: the
+   content script sends nothing on the collector origin except on the `/test`
+   path. Revisit when the collector moves to its own repository (Issue #8).
 
 ### Risks and responses
 
@@ -513,7 +542,9 @@ the collector uses Node built-ins only.
 | Day 1 | Load shared code without a bundler via ordered `content_scripts.js` array in manifest, service worker `importScripts`, and universal export wrapper (`globalThis`/CommonJS) for Node tests (resolving Issue #1). | Build-time script concatenation (`build.js` bundle) or ES modules with bundler. | Proposed; satisfies Chrome's content script module limitation cleanly without introducing bundler dependencies or build artifacts complexity. |
 | Day 1 | Store `browserSessionId` in `chrome.storage.session`, lazily initialized on first access using a promise-cached pattern to prevent race conditions when multiple listeners fire at startup (resolving Issue #2). | Keep `browserSessionId` in service worker memory or persist in `local`. | Proposed; worker restarts do not fragment sessions into multiple IDs, and quitting the browser clears the session cleanly. |
 | Day 2 | Process all tab/window state updates one at a time through a single promise queue (`createSerialQueue()` in `extension/shared/serial-queue.js`); each queued task does the full read-modify-write of dwell state, and collector sends are not awaited inside the queue (resolving Issue #3). | Independent async handlers (lost updates when `onActivated` and `onFocusChanged` overlap); a storage-level lock or version counter with retries. | Proposed; simplest way to prevent overlapping read-modify-write, keeps the dwell logic pure and testable, and one failed handler cannot block later events. |
-| Day 2 | The build always adds `http://localhost:4317/*` to `host_permissions` (never to content-script `matches`), for every tenant including `["*"]`; the collector sends no CORS headers (addressing Issue #4). | Collector sends `Access-Control-Allow-Origin` and answers `OPTIONS`; rely on `*://*/*` covering localhost. | Pending mentor feedback; works for tenants with short domain lists, needs no collector change, and keeps web pages from posting fake events to the collector. |
+| Day 2 | The build always adds `http://localhost:4317/*` to `host_permissions` (never to content-script `matches`), for every tenant including `["*"]`; the collector sends no CORS headers (addressing Issue #4). | Collector sends `Access-Control-Allow-Origin` and answers `OPTIONS`; rely on `*://*/*` covering localhost. | Approved by mentor in the Issue #4 review, conditional on the `Content-Type` rule below; works for tenants with short domain lists and needs no CORS support in the collector. |
+| Day 2 | Correction from mentor review (Issue #4): the collector rejects any `POST /events` whose `Content-Type` is not `application/json` with `415 Unsupported Media Type` and stores nothing. The earlier claim that leaving out CORS headers alone blocks page POSTs was only half true: `text/plain` and form posts are simple requests with no preflight, so the browser still delivers them. | Rely on missing CORS headers alone; check the `Origin` header instead. | Approved by mentor; together with no CORS headers it stops web pages from posting fake events, and the extension already sends `application/json`. |
+| Day 2 | Content script sends nothing on the collector origin except on `/test` (Issue #4, open question 5). | Serve the test page from a separate port. | Approved by mentor for now; revisit when the collector moves to its own repository (Issue #8). |
 
 Do not begin feature implementation until the mentor has reviewed and approved
 the design and plan.
