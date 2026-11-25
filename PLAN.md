@@ -41,7 +41,7 @@ small commits and push progress to the repository at least daily.
 
 | Day | Work and requirements | Demonstrable result |
 | --- | --- | --- |
-| 3 | Build pipeline and settings (`FR-1.1-1.5`), including the collector host permission on every tenant build (Issue #4); local collector and manual test page (`FR-7.1-7.3`); initial pure unit tests | `npm run build` creates a loadable `dist/` whose `host_permissions` includes `http://localhost:4317/*` even with a short `allowedDomains` list; `npm run collector` serves `http://localhost:4317/` and `/test`; valid event POST succeeds, invalid POST returns 400, and a non-JSON `Content-Type` returns 415; `npm test` runs |
+| 3 | Build pipeline and settings (`FR-1.1-1.5`), including the collector host permission on every tenant build (Issue #4); local collector and manual test page (`FR-7.1-7.3`); initial pure unit tests | `npm run build` creates a loadable `dist/` whose `host_permissions` includes `http://localhost:4317/*` even with a short `allowedDomains` list; `npm run collector` serves the static dashboard at `http://localhost:4317/` (table built in the browser from `GET /events`, Issue #5) and `/test`; valid event POST succeeds, invalid POST returns 400, and a non-JSON `Content-Type` returns 415; `npm test` runs |
 | 4 | Page view/click tracking and safe message flow (`FR-2.1-2.4`, `FR-3.1-3.2`, `FR-4.1-4.4`, `NFR-1,3-5`) | A page on an allowed host produces page-view and click events in the collector; no element text/value or password data is sent; common fields are present |
 | 5 | Tab activation, closing, restricted hosts, restart-safe dwell time (`FR-5.1-5.3`, `FR-5.6`), and the serial queue for tab/window state updates (Issue #3) | Switch between tabs and close one; show host-only events and dwell time; restricted pages have no hostname; tests cover dwell calculation, closing an unseen tab, and two events arriving together |
 | 6 | Mentor checkpoint and resilience (`FR-3.3`, `FR-4.5`, `NFR-5,6`) | Review progress with mentor; document changes; reload the extension while a test page is open without repeated console errors; confirm operation resumes after refresh |
@@ -100,6 +100,21 @@ GitHub repository and share the latest commit with the mentor.
   afterwards). Also check that form content types and a missing
   `Content-Type` get `415`, and that `application/json; charset=utf-8` is
   accepted.
+- Test the collector dashboard (Issue #5):
+  - `GET /events` returns `application/json` with at most 200 events, newest
+    first, and the `X-Content-Type-Options: nosniff` header.
+  - An event whose `class` is `<img src=x onerror=alert(1)>` comes back from
+    `GET /events` as the same plain string inside JSON, and `GET /` returns
+    the same static `dashboard.html` bytes before and after it is stored (no
+    event data in the HTML).
+  - `GET /` sends `Content-Security-Policy: default-src 'self'`.
+  - `toRowCells()` in `dashboard-format.js` returns plain strings (including
+    the malicious `class` unchanged) and handles missing optional fields;
+    `summarize()` returns correct counts per event type and dwell totals per
+    hostname.
+  - Manually: store the malicious event, open the dashboard, and confirm the
+    string is shown as text and no alert or console CSP violation from
+    Trailmark code appears.
 - Check serialized events contain no full URL, query string, tab title, page
   text, input value, key value, or password data.
 - Add unit tests for every Should feature implemented, including pause/resume

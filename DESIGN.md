@@ -34,7 +34,9 @@ content script              (Manifest V3)
                           Local Node collector :4317
                           - rejects non-JSON POSTs (415)
                           - validates and stores events
-                          - displays latest 200 at /
+                          - serves latest 200 as JSON at GET /events
+                          - static dashboard at / builds the table
+                            in the browser with textContent
                           - serves a manual test page at /test
 ```
 
@@ -68,15 +70,19 @@ extension/
     tracking-logic.js
     serial-queue.js
 collector/
-  server.js
-  page.js
-  test-page.html
+  server.js                 (Node only: HTTP routes, storage, validation)
+  public/
+    dashboard.html          (static page served at /, no event data inside)
+    dashboard.js            (browser: fetches GET /events, builds the table)
+    dashboard-format.js     (pure: event -> row cell strings, summaries)
+    test-page.html          (manual test page served at /test)
 test/
   events.test.js
   tracking-logic.test.js
   serial-queue.test.js
   build.test.js
   collector.test.js
+  dashboard-format.test.js
 ```
 
 The build script fills the manifest template and injects the configured site
@@ -90,6 +96,70 @@ the serial queue that processes tab/window events one at a time (section 5).
 The Node built-in test runner can test these modules without Chrome. Browser
 API wiring stays in the service worker and content script; collector request
 handling is tested through Node's HTTP interface.
+
+### Collector dashboard rendering (Issue #5)
+
+**Problem.** An earlier draft said the collector generates the dashboard
+HTML on the server and uses `textContent` to stay XSS-safe. `textContent` and
+`document.createElement` exist only in a browser, not in Node, so that could
+not work. The risk is real: click events carry page-controlled values. Any
+website can give an element `class="<img src=x onerror=alert(1)>"`, and that
+string arrives in a `tmClick` event as data.
+
+**Chosen approach: the dashboard table is built in the browser, never on the
+server.**
+
+- **`server.js` (Node) never builds HTML from event data.** It serves three
+  fixed files from `collector/public/` and returns event data only as JSON:
+  - `GET /` serves `dashboard.html`, a static page with an empty table and
+    `<script src="/dashboard-format.js">` and `<script src="/dashboard.js">`
+    tags. It contains no event values.
+  - `GET /events` returns the latest 200 stored events, newest first, as
+    `Content-Type: application/json`, produced with `JSON.stringify`.
+  - `GET /test` serves the manual test page (it shows no event data).
+- **`dashboard.js` (browser) builds the table.** It calls
+  `fetch('/events')`, parses the JSON, and for each event creates the row and
+  cells with `document.createElement` and sets each value with
+  `cell.textContent = value`. It never uses `innerHTML`, `outerHTML`,
+  `insertAdjacentHTML`, `document.write`, `eval`, or `new Function` (NFR-3).
+  It refreshes the table every 2 seconds by clearing the rows with
+  `replaceChildren()` and rebuilding them.
+- **`dashboard-format.js` (pure) turns events into strings.** It exports
+  `toRowCells(event)`, which returns the array of plain strings shown in one
+  row (time, event, siteKey, source, hostname, details), and
+  `summarize(events)`, which returns counts per event type and total dwell
+  time per hostname for FR-7.4. It uses the same universal wrapper as
+  `extension/shared/` (section 3), so `dashboard.html` loads it with a
+  `<script>` tag and Node tests load it with `require()`. Only the small DOM
+  loop in `dashboard.js` is left untested in Node; it is checked by hand.
+- **The FR-7.4 summary** is computed in the browser with `summarize()` on the
+  same 200 events. If it needs all stored events instead, a `GET /summary`
+  JSON route can be added later; it would still be rendered with
+  `textContent`.
+
+**Defense in depth.**
+
+- `dashboard.html` is served with
+  `Content-Security-Policy: default-src 'self'`. Scripts can load only from
+  the collector itself, and inline scripts and inline event handlers (such as
+  `onerror=`) are blocked. Even if markup were injected by mistake, it could
+  not run.
+- Every collector response sets `X-Content-Type-Options: nosniff`, so the
+  browser never treats the JSON from `GET /events` as HTML or script.
+- Because the collector sends no CORS headers (section 6, Issue #4), other
+  websites cannot read `GET /events`. The event log can only be read by pages
+  served from `http://localhost:4317` and by tools such as `curl`.
+- The `415` Content-Type rule (section 6) applies only to `POST /events`; the
+  dashboard's `GET /events` request is unaffected.
+- The content script sends nothing on the collector origin except on `/test`
+  (section 8, open question 5), so using the dashboard does not create events
+  about itself.
+
+**Alternative rejected: build the HTML in Node and escape every value.**
+Escaping `&`, `<`, `>`, `"`, and `'` can be made safe, but it relies on never
+forgetting an escape or using it in the wrong context (for example inside an
+attribute or URL). Building the DOM in the browser with `textContent` makes
+values plain text by construction, which is what NFR-3 asks for.
 
 ### Loading shared code without a bundler
 
@@ -469,8 +539,12 @@ The service worker is registered in `manifest.json` as a classic script:
 - **NFR-2:** The final README will include a "What Trailmark collects" table
   listing every event and each field.
 - **NFR-3:** Do not use `eval`, `new Function`, or `innerHTML` with event data.
-  Render collector values using `textContent` and create DOM elements
-  explicitly.
+  The collector server never builds HTML from event data; it returns events
+  as JSON from `GET /events`. The dashboard table is built in the browser by
+  `collector/public/dashboard.js`, which creates DOM elements explicitly and
+  sets every value with `textContent`. The dashboard is served with
+  `Content-Security-Policy: default-src 'self'` and all responses with
+  `X-Content-Type-Options: nosniff` (section 3, Issue #5).
 - **NFR-4:** Validate message type, event name, source, and permitted field
   types in the service worker before forwarding a page message. Check the
   extension sender and accept only the known Trailmark event names and their
@@ -545,6 +619,7 @@ the collector uses Node built-ins only.
 | Day 2 | The build always adds `http://localhost:4317/*` to `host_permissions` (never to content-script `matches`), for every tenant including `["*"]`; the collector sends no CORS headers (addressing Issue #4). | Collector sends `Access-Control-Allow-Origin` and answers `OPTIONS`; rely on `*://*/*` covering localhost. | Approved by mentor in the Issue #4 review, conditional on the `Content-Type` rule below; works for tenants with short domain lists and needs no CORS support in the collector. |
 | Day 2 | Correction from mentor review (Issue #4): the collector rejects any `POST /events` whose `Content-Type` is not `application/json` with `415 Unsupported Media Type` and stores nothing. The earlier claim that leaving out CORS headers alone blocks page POSTs was only half true: `text/plain` and form posts are simple requests with no preflight, so the browser still delivers them. | Rely on missing CORS headers alone; check the `Origin` header instead. | Approved by mentor; together with no CORS headers it stops web pages from posting fake events, and the extension already sends `application/json`. |
 | Day 2 | Content script sends nothing on the collector origin except on `/test` (Issue #4, open question 5). | Serve the test page from a separate port. | Approved by mentor for now; revisit when the collector moves to its own repository (Issue #8). |
+| Day 2 | Build the collector dashboard table in the browser: `server.js` serves a static `dashboard.html` and returns the latest 200 events as JSON from `GET /events`; `dashboard.js` builds rows with `createElement` and `textContent`; pure formatting and summaries live in `dashboard-format.js`; dashboard served with `Content-Security-Policy: default-src 'self'` and `X-Content-Type-Options: nosniff` (Issue #5). | Generate the HTML in Node and escape `& < > " '` in every value; the earlier draft's server-side `textContent` (not possible in Node). | Proposed, pending mentor review; values are plain text by construction (NFR-3), formatting stays testable in Node, and the CSP blocks inline script even if markup slips through. |
 
 Do not begin feature implementation until the mentor has reviewed and approved
 the design and plan.
