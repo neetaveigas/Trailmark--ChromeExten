@@ -73,6 +73,7 @@ test/
   events.test.js
   tracking-logic.test.js
   serial-queue.test.js
+  build.test.js
   collector.test.js
 ```
 
@@ -367,6 +368,61 @@ origin is a separate host permission because it is not a website to track.
 There will be no `tabs` permission, and no `activeTab` or `scripting`
 permission unless the approved design changes and the mentor agrees.
 
+### Reaching the collector on every tenant build (Issue #4, pending mentor feedback)
+
+**Problem.** `host_permissions` is generated from `allowedDomains`. With
+`["*"]` the pattern `*://*/*` happens to include `localhost`, but a tenant
+limited to a short list (for example two company domains) would have no
+permission for the collector. Chrome would then block the service worker's
+`fetch` to `http://localhost:4317/events` as a CORS error, and no events would
+arrive.
+
+**Chosen approach: the build always adds the collector origin to
+`host_permissions`.**
+
+- `scripts/build.js` always appends `http://localhost:4317/*` to
+  `host_permissions`, whatever `allowedDomains` contains, including `["*"]`.
+  If the exact entry already exists it is not duplicated.
+- The collector origin is added **only** to `host_permissions`, never to the
+  content script's `matches`. It grants network access for the worker; it
+  does not make the collector a tracked website. The rule from FR-1.3 that
+  `host_permissions` and `matches` always match therefore applies to the
+  `allowedDomains` entries; the collector entry is the one documented
+  exception.
+- The collector URL is a single constant in the build script, used both for
+  the permission and for the URL injected into the worker, so the two cannot
+  drift apart.
+- Manifest generation is a pure function (`createManifest(config, template)`)
+  exported from `scripts/build.js`, so it is unit-tested in Node without
+  running a build.
+
+Example output for a tenant with a short domain list:
+
+```json
+"host_permissions": [
+  "*://example.com/*",
+  "*://*.example.com/*",
+  "http://localhost:4317/*"
+],
+"content_scripts": [
+  {
+    "matches": ["*://example.com/*", "*://*.example.com/*"],
+    "js": ["shared/events.js", "shared/tracking-logic.js", "content.js"]
+  }
+]
+```
+
+(The exact patterns generated for each `allowedDomains` entry depend on the
+domain syntax still to be confirmed in open question 2, section 8.)
+
+**Alternative rejected: CORS headers on the collector.** The collector will
+**not** send `Access-Control-Allow-Origin` headers and will not answer
+`OPTIONS` preflight requests with CORS approval. An extension service worker
+with host permission is not subject to CORS, so the headers are unnecessary.
+Adding them would also let any web page the user visits POST fake events to
+the collector, which works against FR-3.2 and NFR-4. Without them, a page's
+cross-origin JSON POST fails its preflight and is blocked by the browser.
+
 ### Background Service Worker Configuration
 The service worker is registered in `manifest.json` as a classic script:
 ```json
@@ -419,6 +475,16 @@ the collector uses Node built-ins only.
 3. **Day 1 repository:** Create a GitHub repository and send its link to
    `@Jesudas Lobo` on Slack as required. Confirm whether the mentor expects a
    different schedule if the work is part-time.
+4. **Collector access approach (Issue #4):** Confirm the choice in section 6
+   to always add `http://localhost:4317/*` to `host_permissions` at build
+   time, and to send no CORS headers from the collector.
+5. **Tracking the local test page:** The manual test page is served at
+   `http://localhost:4317/test`, so the demo tenant needs `localhost` in
+   `allowedDomains`. That also injects the content script into the
+   collector's own dashboard at `/`, where clicks would create new events
+   about the event list. Proposed default: the content script sends nothing
+   on the collector origin except on the `/test` path. Confirm this, or
+   whether the test page should be served from a separate port.
 
 ### Risks and responses
 
@@ -447,6 +513,7 @@ the collector uses Node built-ins only.
 | Day 1 | Load shared code without a bundler via ordered `content_scripts.js` array in manifest, service worker `importScripts`, and universal export wrapper (`globalThis`/CommonJS) for Node tests (resolving Issue #1). | Build-time script concatenation (`build.js` bundle) or ES modules with bundler. | Proposed; satisfies Chrome's content script module limitation cleanly without introducing bundler dependencies or build artifacts complexity. |
 | Day 1 | Store `browserSessionId` in `chrome.storage.session`, lazily initialized on first access using a promise-cached pattern to prevent race conditions when multiple listeners fire at startup (resolving Issue #2). | Keep `browserSessionId` in service worker memory or persist in `local`. | Proposed; worker restarts do not fragment sessions into multiple IDs, and quitting the browser clears the session cleanly. |
 | Day 2 | Process all tab/window state updates one at a time through a single promise queue (`createSerialQueue()` in `extension/shared/serial-queue.js`); each queued task does the full read-modify-write of dwell state, and collector sends are not awaited inside the queue (resolving Issue #3). | Independent async handlers (lost updates when `onActivated` and `onFocusChanged` overlap); a storage-level lock or version counter with retries. | Proposed; simplest way to prevent overlapping read-modify-write, keeps the dwell logic pure and testable, and one failed handler cannot block later events. |
+| Day 2 | The build always adds `http://localhost:4317/*` to `host_permissions` (never to content-script `matches`), for every tenant including `["*"]`; the collector sends no CORS headers (addressing Issue #4). | Collector sends `Access-Control-Allow-Origin` and answers `OPTIONS`; rely on `*://*/*` covering localhost. | Pending mentor feedback; works for tenants with short domain lists, needs no collector change, and keeps web pages from posting fake events to the collector. |
 
 Do not begin feature implementation until the mentor has reviewed and approved
 the design and plan.
