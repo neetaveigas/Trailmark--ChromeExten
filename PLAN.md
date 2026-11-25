@@ -28,7 +28,9 @@ longer schedule with the mentor while keeping milestone order.
    page-title conflict recorded in `DESIGN.md`.
 3. Ask the mentor to resolve open questions and review the schedule.
 4. Update the design's Decisions log and revise the plan based on feedback.
-5. Begin feature code only after the mentor has reviewed and approved both
+5. Create the separate collector repository, `trailmark-collector`, and share
+   it with the mentor like this one (Issue #8).
+6. Begin feature code only after the mentor has reviewed and approved both
    documents.
 
 **Where:** 30-minute mentor call; record outcomes in `DESIGN.md` and
@@ -37,33 +39,56 @@ longer schedule with the mentor while keeping milestone order.
 ## 2. Build milestones (Days 3-9)
 
 Each milestone ends with a working result that can be shown. Keep the work in
-small commits and push progress to the repository at least daily.
+small commits and push progress to both repositories at least daily.
+
+### Two repositories (Issue #8)
+
+The work is split across two GitHub repositories, cloned side by side in the
+same parent folder:
+
+| Repository | Contains | Commands |
+| --- | --- | --- |
+| `Trailmark--ChromeExten` (this one) | Extension source, build script, `DESIGN.md`, `PLAN.md`, extension tests | `npm run build`, `npm test` (extension tests only), `npm run collector` (runs `npm --prefix ../trailmark-collector start`, so the FR-1.5 command still works from here) |
+| `trailmark-collector` | Node collector server, dashboard, manual test page, collector tests, its own `README.md` and `package.json` | `npm start` (also `npm run collector`) starts `http://localhost:4317`; `npm test` runs the collector tests |
+
+The event format in `DESIGN.md` section 4 is the contract between the two
+repositories. Each repository keeps a copy of the same example events
+(`test/fixtures/contract-examples.json`): the extension's tests check that the
+events it builds match them, and the collector's tests check that it accepts
+them. A change to the event format is made in both repositories in the same
+day and noted in the Decisions log.
 
 | Day | Work and requirements | Demonstrable result |
 | --- | --- | --- |
-| 3 | Build pipeline and settings (`FR-1.1-1.5`), including the collector host permission on every tenant build (Issue #4); local collector and manual test page (`FR-7.1-7.3`); initial pure unit tests | `npm run build` creates a loadable `dist/` whose `host_permissions` includes `http://localhost:4317/*` even with a short `allowedDomains` list; `npm run collector` serves the static dashboard at `http://localhost:4317/` (table built in the browser from `GET /events`, Issue #5) and `/test`; valid event POST succeeds, invalid POST returns 400, and a non-JSON `Content-Type` returns 415; `npm test` runs |
+| 3 | **Extension repo:** build pipeline and settings (`FR-1.1-1.5`), including the collector host permission on every tenant build (Issue #4); initial pure unit tests. **Collector repo:** set up `trailmark-collector` with its own `package.json`, `README.md` (install/start, endpoints, expected event fields), server, dashboard, and manual test page (`FR-7.1-7.3`); first collector tests; shared contract example events in both repos | Extension: `npm run build` creates a loadable `dist/` whose `host_permissions` includes `http://localhost:4317/*` even with a short `allowedDomains` list; `npm test` runs. Collector: `npm start` in `trailmark-collector` (or `npm run collector` from the extension repo) serves the static dashboard at `http://localhost:4317/` (table built in the browser from `GET /events`, Issue #5) and `/test`; valid event POST succeeds, invalid POST returns 400, and a non-JSON `Content-Type` returns 415; its `npm test` runs |
 | 4 | Page view/click tracking and safe message flow (`FR-2.1-2.4`, `FR-3.1-3.2`, `FR-4.1-4.4`, `NFR-1,3-5`); unit tests for that day's shared logic in `shared/events.js`, written the same day (Issue #7) | A page on an allowed host produces page-view and click events in the collector; no element text/value or password data is sent; common fields are present. `npm test` passes for: the click-field whitelist (only tag, `id`, `name`, `class`, `type`; never text or value); path with query and fragment removed; referrer reduced to a hostname; password fields ignored; the worker's page-message validation (NFR-4) rejecting unknown event names, sources, and extra fields; and a serialized page-view/click event containing no full URL, query string, title, text, or value (NFR-1) |
 | 5 | Tab activation, closing, restricted hosts, dwell time stored in `chrome.storage.session` (`FR-5.1-5.3`), and the serial queue for tab/window state updates (Issue #3); tests for dwell calculation, restricted flags, and the queue written the same day | Switch between tabs and close one; show host-only events and dwell time; restricted pages have no hostname; tests cover dwell calculation, closing an unseen tab, and two events arriving together |
 | 6 | Mentor checkpoint and resilience: surviving a worker restart (`FR-5.6`, moved from day 5, Issue #7), extension reload (`FR-3.3`, `NFR-6`), failed sends (`FR-4.5`), and console errors (`NFR-5`) | Review progress with mentor; document changes; stop the service worker by hand while a tab is active, switch tabs, and show a correct `previousDwellMs`; reload the extension while a test page is open without repeated console errors; confirm operation resumes after refresh |
 | 7 | Scroll and typing bursts, browser focus, and short-tab filtering (`FR-2.5-2.6`, `FR-5.5`, `FR-5.7`) | Show one grouped scroll event per completed scroll, a typing-burst event with counts only, and dwell time pausing outside Chrome; ignore tabs active for less than 300 ms; unit tests cover grouping, focus, and filtering |
-| 8 | Popup and collector summaries (`FR-6.1-6.4`, `FR-7.4`); domain-setting validation (`FR-1.6`) | Save, list, and delete a per-domain site key; invalid key shows an error; events use the domain override; collector keeps running totals of all events (not just the latest 200), serves them at `GET /summary`, and the dashboard displays event counts and dwell totals |
-| 9 | Stabilization and complete demo rehearsal | Run the full demo flow, required tests, and checks for privacy leaks; complete the README and list any skipped Should items as known issues |
+| 8 | **Extension repo:** popup (`FR-6.1-6.4`) and domain-setting validation (`FR-1.6`). **Collector repo:** running totals and `GET /summary` (`FR-7.4`) | Save, list, and delete a per-domain site key; invalid key shows an error; events use the domain override; collector keeps running totals of all events (not just the latest 200), serves them at `GET /summary`, and the dashboard displays event counts and dwell totals |
+| 9 | Stabilization and complete demo rehearsal in both repositories | Run the full demo flow, both repositories' tests, and checks for privacy leaks; complete both READMEs and list any skipped Should items as known issues |
 
 ### Day 10 - Final hand-in and demo
 
-Run the demo on a call, show the passing `npm test` output, and confirm the
-repository contains the final `DESIGN.md`, `PLAN.md`, code, and README. The
-README must include setup/build/test/collector instructions, the "What Trailmark
-collects" table, Known issues, and the final test output.
+Run the demo on a call, show the passing `npm test` output from both
+repositories, and confirm that this repository contains the final
+`DESIGN.md`, `PLAN.md`, extension code, and README, and that
+`trailmark-collector` contains the collector code, tests, and its own README.
+This README must include setup/build/test instructions, a link to the
+collector repository and how to start it, the "What Trailmark collects"
+table, Known issues, and the final test output. The collector README covers
+install/start, the endpoints, and the event fields it expects.
 
-**Where:** Local Chrome and terminal for the demo; push final changes to the
-GitHub repository and share the latest commit with the mentor.
+**Where:** Local Chrome and terminal for the demo; push final changes to both
+GitHub repositories and share the latest commit of each with the mentor.
 
 ## 3. Build order and reasons
 
-1. **Config, build, collector, and pure helpers:** Establish the event shape and
-   collector contract first. Test URL parsing and other tricky logic in Node
-   before involving Chrome.
+1. **Config, build, collector repository, and pure helpers:** Establish the
+   event shape and the contract between the two repositories first, and set up
+   `trailmark-collector` on day 3 so the extension has somewhere to send
+   events from day 4. Test URL parsing and other tricky logic in Node before
+   involving Chrome.
 2. **Page-to-collector vertical slice:** Implement page view and click, content
    script messaging, worker validation, and collector POST. This verifies the
    main architecture early.
@@ -87,7 +112,11 @@ GitHub repository and share the latest commit with the mentor.
 
 ## 4. Testing and acceptance checks
 
-- Run `npm test` without opening a browser. Use Node's built-in test runner.
+Both repositories run `npm test` without opening a browser, using Node's
+built-in test runner. Each repository's tests run on their own.
+
+### Extension repository (`npm test` in this repository)
+
 - Write each shared module's tests on the same day as the module, starting
   with the day 4 tests for `shared/events.js` (see the day 4 row). Day 9 is
   for edge cases and cleanup, not for writing the first tests.
@@ -123,6 +152,18 @@ GitHub repository and share the latest commit with the mentor.
 - Test `isValidSiteKey()` from `shared/events.js` (used by the popup and the
   worker): exactly 22 characters of letters, numbers, `_` and `-` pass; 21 or
   23 characters, spaces, and other symbols fail.
+- Check serialized events contain no full URL, query string, tab title, page
+  text, input value, key value, or password data, and that no event
+  (including `tmBrowserBlur` and `tmBrowserFocus`) has a `timestamp` field.
+- Add unit tests for every Should feature implemented, including pause/resume
+  dwell behavior if browser blur/focus is included.
+- Contract check (Issue #8): the events the extension builds for each event
+  type match `test/fixtures/contract-examples.json`.
+
+### Collector repository (`npm test` in `trailmark-collector`)
+
+- Contract check (Issue #8): every event in
+  `test/fixtures/contract-examples.json` is accepted by `POST /events`.
 - Test that the collector does not send `Access-Control-Allow-Origin` on
   `POST /events` or `OPTIONS /events`.
 - Test the collector's `Content-Type` rule (Issue #4 correction): a
@@ -151,7 +192,7 @@ GitHub repository and share the latest commit with the mentor.
   - Rejected `POST`s (`415` or `400`) do not change `GET /summary`.
   - `GET /summary` has the same headers as `GET /events` (`application/json`,
     `nosniff`).
-  - Unit tests for `addToSummary()` in `collector/summary.js`: counts per
+  - Unit tests for `addToSummary()` in `summary.js`: counts per
     event type; dwell added to `previousHostname`; restricted dwell goes to
     `restrictedDwellMs`; negative, non-numeric, or missing `previousDwellMs`
     is ignored; a hostname of `__proto__` is stored as a normal entry; the
@@ -159,16 +200,16 @@ GitHub repository and share the latest commit with the mentor.
   - Manually: store the malicious event, open the dashboard, and confirm the
     string is shown as text and no alert or console CSP violation from
     Trailmark code appears.
-- Check serialized events contain no full URL, query string, tab title, page
-  text, input value, key value, or password data, and that no event
-  (including `tmBrowserBlur` and `tmBrowserFocus`) has a `timestamp` field.
-- Add unit tests for every Should feature implemented, including pause/resume
-  dwell behavior if browser blur/focus is included.
+### Manual checks and demo
+
+- Start the collector from its own repository: `cd ../trailmark-collector`
+  then `npm start` (or `npm run collector` from this repository).
 - Manually use the collector's `/test` page to try buttons, scrolling, a text
   field, and a password field. The password field must produce no event data.
-- Demo: build/load `dist/`, start the collector, show page events and password
-  privacy, switch/close tabs and show dwell events, run tests, and show any
-  completed Should features.
+- Demo: build and load `dist/` from this repository, start the collector from
+  `trailmark-collector`, show page events and password privacy, switch/close
+  tabs and show dwell events, run `npm test` in both repositories, and show
+  any completed Should features.
 
 ## 5. What to defer if behind
 
