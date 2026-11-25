@@ -91,6 +91,24 @@ test/
 
 The build script fills the manifest template and injects the configured site
 key into generated extension code. `dist/` is generated output, not source.
+
+**What `build.js` writes to `dist/` (Issue #6).** The manifest, the service
+worker, the content script, and the popup all load shared code from
+`shared/...` paths **relative to `dist/`**, but the source files live in
+`extension/shared/`. The build therefore:
+
+1. Deletes any old `dist/` so stale files never linger.
+2. Copies `extension/service-worker.js`, `extension/content.js`, and
+   `extension/popup.html`, `popup.js`, `popup.css` to the root of `dist/`.
+3. Copies the whole `extension/shared/` folder to `dist/shared/`
+   (`events.js`, `tracking-logic.js`, `serial-queue.js`). Without this step
+   `importScripts()` in the worker, the content script `js` list, and the
+   popup's `<script>` tags would all point at missing files and the
+   extension would fail to load.
+4. Writes the generated `manifest.json` and injects the site key.
+5. Checks that every file the manifest refers to (`background.service_worker`,
+   each `content_scripts[].js` entry, `action.default_popup`) exists in
+   `dist/`, and stops with a clear error if one is missing.
 The exact file names can change if implementation shows a simpler layout;
 record any agreed change below.
 
@@ -167,7 +185,8 @@ computed from that list.
     the total for `previousHostname`. If later events also report dwell
     (for example when browser blur ends a dwell period, FR-5.5), they are
     added the same way and recorded in the event contract (section 4).
-  - Dwell from a restricted previous tab (no hostname) is added to a single
+  - Dwell from a restricted previous tab (`previousRestricted: true`, no
+    `previousHostname`; see section 4) is added to a single
     `restrictedDwellMs` total, so no time is silently lost or attributed to
     the wrong website.
   - `previousDwellMs` is only added if it is a finite number `>= 0`;
@@ -221,8 +240,9 @@ values plain text by construction, which is what NFR-3 asks for.
 ### Loading shared code without a bundler
 
 Because Manifest V3 content scripts cannot run as ES modules, and no bundler
-is permitted, shared pure modules (`extension/shared/`) are loaded across the
-three runtimes as follows:
+is permitted, shared pure modules (`extension/shared/`, copied by the build to
+`dist/shared/`) are loaded across the content script, the service worker, the
+popup, and Node tests as follows:
 
 1. **Content script (`dist/content.js`):**
    The generated `manifest.json` specifies an ordered array in `content_scripts[].js`:
@@ -304,10 +324,30 @@ three runtimes as follows:
    });
    ```
 
-   **Strict Dependency Ordering Rule:** Both the `manifest.json` `content_scripts[].js`
-   array and the service worker's `importScripts()` call must list dependencies in
-   topological order (i.e. `events.js` must always be listed before dependent files like
+   **Strict Dependency Ordering Rule:** The `manifest.json` `content_scripts[].js`
+   array, the service worker's `importScripts()` call, and the popup's
+   `<script>` tags must all list dependencies in topological order (i.e.
+   `events.js` must always be listed before dependent files like
    `tracking-logic.js`).
+
+5. **Popup (`dist/popup.html`) (Issue #6):**
+   The popup **does** use shared code. Site-key validation (FR-6.2: exactly
+   22 characters, only letters, numbers, `_` and `-`) lives once in
+   `shared/events.js` as `isValidSiteKey(key)`. The popup uses it to show the
+   error next to the field, and the service worker uses the same function
+   before applying a saved per-domain key (FR-6.4), so the two can never
+   disagree. `popup.html` loads the shared file with a `<script>` tag before
+   `popup.js`, in the same dependency order as the manifest:
+   ```html
+   <script src="shared/events.js"></script>
+   <script src="popup.js"></script>
+   ```
+   Both must be external files. Manifest V3's default content security policy
+   for extension pages blocks inline `<script>` blocks and inline event
+   handlers, so `popup.html` contains no inline script. The popup needs only
+   `events.js`; it does not load `tracking-logic.js` or `serial-queue.js`.
+   `popup.js` reads `globalThis.TrailmarkEvents`, exactly like the content
+   script. Node tests cover `isValidSiteKey` through `require()`.
 
 ## 4. Event contract
 
@@ -331,10 +371,32 @@ Planned event-specific fields:
 | `tmClick` | Target tag, `id`, `name`, `class`, and `type`; never text or value |
 | `tmScroll` (Should) | Direction, duration, start position, end position; close a burst after 150 ms without scrolling or when direction changes |
 | `tmTypingBurst` (Should) | Key count and duration only; group key presses less than 1 second apart; never key values |
-| `tmTabActivated` | New tab hostname and `tabId`; previous `tabId`, previous hostname, and previous dwell time in milliseconds; restricted tabs have no hostname |
-| `tmTabClosed` | Last known hostname, or `restricted: true` with no hostname |
-| `tmBrowserBlur` (Should) | No page or URL details |
-| `tmBrowserFocus` (Should) | No page or URL details |
+| `tmTabActivated` | New tab: `tabId`, and either `hostname` or `restricted: true` (no hostname). Previous tab: `previousTabId`, `previousDwellMs`, and either `previousHostname` or `previousRestricted: true` (no previous hostname). See the rules below. |
+| `tmTabClosed` | `tabId`, and either the last known `hostname` or `restricted: true` with no hostname |
+| `tmBrowserBlur` (Should) | Common fields only. No page or URL details and no `timestamp` field; the time is `collectedAt`. |
+| `tmBrowserFocus` (Should) | Common fields only. No page or URL details and no `timestamp` field; the time is `collectedAt`. |
+
+**Restricted flags in `tmTabActivated` (Issue #6).** A tab switch involves two
+tabs, and either one can be hidden from Trailmark (not in `allowedDomains`, a
+`chrome://` page, or a blank tab). The event therefore carries two separate
+flags so the collector can tell which tab was hidden:
+
+- `restricted: true` means the **new** tab is hidden; `hostname` is omitted.
+- `previousRestricted: true` means the **previous** tab is hidden;
+  `previousHostname` is omitted.
+- Each flag is only present when `true`, and a hostname and its flag are
+  never both present.
+- On the first activation of a session there is no previous tab, so
+  `previousTabId`, `previousHostname`, `previousRestricted`, and
+  `previousDwellMs` are all omitted.
+
+The collector's running totals (section 3) add `previousDwellMs` to
+`previousHostname`, or to `restrictedDwellMs` when `previousRestricted` is
+`true`.
+
+No event has a `timestamp` field. Every event already carries `collectedAt`
+(when it happened) and `sentAt` (when it was sent), so a separate timestamp
+would only repeat them.
 
 No event contains a full URL, query string, fragment, page text, input value,
 password data, clipboard data, or tab title. The implementation and tests will
@@ -399,6 +461,14 @@ sleep. State is partitioned across `chrome.storage.local` and
      correctly computes the full dwell duration without losing the initial timestamp.
      Time is not counted while Chrome is completely closed because the session storage
      clears.
+   - **`chrome.storage.session` only, with no fallback (Issue #6):** Dwell state is
+     never read from or written to `chrome.storage.local`, not even as a fallback
+     if a session read fails or returns nothing. Local storage survives a browser
+     restart, so old dwell state could be picked up the next day and turned into a
+     huge, wrong `previousDwellMs`. If the session state is missing, the worker
+     treats it as "no active tab yet": the next activation starts a new dwell
+     period and sends no previous-tab fields. `chrome.storage.local` holds only
+     the `installId` and the popup's saved per-domain site keys.
 
 ### Processing tab and window events one at a time (Resolving Issue #3)
 
@@ -678,6 +748,7 @@ the collector uses Node built-ins only.
 | Day 2 | Content script sends nothing on the collector origin except on `/test` (Issue #4, open question 5). | Serve the test page from a separate port. | Approved by mentor for now; revisit when the collector moves to its own repository (Issue #8). |
 | Day 2 | Build the collector dashboard table in the browser: `server.js` serves a static `dashboard.html` and returns the latest 200 events as JSON from `GET /events`; `dashboard.js` builds rows with `createElement` and `textContent`; pure formatting lives in `dashboard-format.js`; dashboard served with `Content-Security-Policy: default-src 'self'` and `X-Content-Type-Options: nosniff` (Issue #5). | Generate the HTML in Node and escape `& < > " '` in every value; the earlier draft's server-side `textContent` (not possible in Node). | Approved by mentor in the Issue #5 review, conditional on the running-totals change below; values are plain text by construction (NFR-3), formatting stays testable in Node, and the CSP blocks inline script even if markup slips through. |
 | Day 2 | Correction from mentor review (Issue #5; also Issue #6): the collector keeps running totals (count per event type, dwell per hostname) separate from the 200-event list, updated once per valid event with the pure `addToSummary(summary, event)` in `collector/summary.js`, and served as JSON from `GET /summary`, which the dashboard renders with `textContent`. | Compute the summary in the browser from the latest 200 events (earlier draft), which undercounts once older events are dropped. | Pending mentor review; FR-7.4 totals include every event, and the counting logic is a pure function tested in Node. |
+| Day 2 | Smaller fixes from the design review (Issue #6): `tmTabActivated` carries separate `restricted` (new tab) and `previousRestricted` (previous tab) flags; dwell state lives only in `chrome.storage.session` with no `chrome.storage.local` fallback; no event has a `timestamp` field (`collectedAt` covers it); `build.js` copies `extension/shared/` to `dist/shared/` and checks every manifest file exists; the popup loads `shared/events.js` with an external `<script>` tag before `popup.js` and uses the shared `isValidSiteKey()`. | One shared `restricted` flag; falling back to local storage; a separate `timestamp`; a popup with its own copy of the site-key check. | Pending mentor review; the collector can tell which tab was hidden, stale dwell state cannot survive a browser restart, the extension loads from `dist/`, and the popup and worker validate site keys the same way. |
 
 Do not begin feature implementation until the mentor has reviewed and approved
 the design and plan.

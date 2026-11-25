@@ -82,6 +82,13 @@ GitHub repository and share the latest commit with the mentor.
   and random text.
 - Test dwell time across tab switches, and confirm closing an unseen tab does
   not throw.
+- Test the `tmTabActivated` restricted flags (Issue #6) for all four cases:
+  both tabs visible, only the new tab restricted, only the previous tab
+  restricted, and both restricted. Each restricted tab has its flag set and
+  no hostname; the first activation of a session has no previous-tab fields.
+- Test that missing session dwell state is treated as "no active tab yet"
+  (no previous-tab fields, no huge `previousDwellMs`), and that the dwell
+  logic never reads `chrome.storage.local` (Issue #6).
 - Test the serial queue (Issue #3): start two handlers at the same moment,
   such as a tab activation and a window focus change, against a fake async
   storage with a delay. Both updates must survive, the dwell time must be
@@ -92,6 +99,13 @@ GitHub repository and share the latest commit with the mentor.
   `["*"]`, `host_permissions` contains `http://localhost:4317/*` exactly once,
   and the content script's `matches` never contains it. The `allowedDomains`
   entries in `host_permissions` and `matches` are identical.
+- Test the build output (Issue #6): after `npm run build`, `dist/shared/`
+  contains `events.js`, `tracking-logic.js`, and `serial-queue.js`; every file
+  the manifest refers to exists in `dist/`; and a missing file stops the
+  build with a clear error.
+- Test `isValidSiteKey()` from `shared/events.js` (used by the popup and the
+  worker): exactly 22 characters of letters, numbers, `_` and `-` pass; 21 or
+  23 characters, spaces, and other symbols fail.
 - Test that the collector does not send `Access-Control-Allow-Origin` on
   `POST /events` or `OPTIONS /events`.
 - Test the collector's `Content-Type` rule (Issue #4 correction): a
@@ -129,7 +143,8 @@ GitHub repository and share the latest commit with the mentor.
     string is shown as text and no alert or console CSP violation from
     Trailmark code appears.
 - Check serialized events contain no full URL, query string, tab title, page
-  text, input value, key value, or password data.
+  text, input value, key value, or password data, and that no event
+  (including `tmBrowserBlur` and `tmBrowserFocus`) has a `timestamp` field.
 - Add unit tests for every Should feature implemented, including pause/resume
   dwell behavior if browser blur/focus is included.
 - Manually use the collector's `/test` page to try buttons, scrolling, a text
