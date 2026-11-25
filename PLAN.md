@@ -42,9 +42,9 @@ small commits and push progress to the repository at least daily.
 | Day | Work and requirements | Demonstrable result |
 | --- | --- | --- |
 | 3 | Build pipeline and settings (`FR-1.1-1.5`), including the collector host permission on every tenant build (Issue #4); local collector and manual test page (`FR-7.1-7.3`); initial pure unit tests | `npm run build` creates a loadable `dist/` whose `host_permissions` includes `http://localhost:4317/*` even with a short `allowedDomains` list; `npm run collector` serves the static dashboard at `http://localhost:4317/` (table built in the browser from `GET /events`, Issue #5) and `/test`; valid event POST succeeds, invalid POST returns 400, and a non-JSON `Content-Type` returns 415; `npm test` runs |
-| 4 | Page view/click tracking and safe message flow (`FR-2.1-2.4`, `FR-3.1-3.2`, `FR-4.1-4.4`, `NFR-1,3-5`) | A page on an allowed host produces page-view and click events in the collector; no element text/value or password data is sent; common fields are present |
-| 5 | Tab activation, closing, restricted hosts, restart-safe dwell time (`FR-5.1-5.3`, `FR-5.6`), and the serial queue for tab/window state updates (Issue #3) | Switch between tabs and close one; show host-only events and dwell time; restricted pages have no hostname; tests cover dwell calculation, closing an unseen tab, and two events arriving together |
-| 6 | Mentor checkpoint and resilience (`FR-3.3`, `FR-4.5`, `NFR-5,6`) | Review progress with mentor; document changes; reload the extension while a test page is open without repeated console errors; confirm operation resumes after refresh |
+| 4 | Page view/click tracking and safe message flow (`FR-2.1-2.4`, `FR-3.1-3.2`, `FR-4.1-4.4`, `NFR-1,3-5`); unit tests for that day's shared logic in `shared/events.js`, written the same day (Issue #7) | A page on an allowed host produces page-view and click events in the collector; no element text/value or password data is sent; common fields are present. `npm test` passes for: the click-field whitelist (only tag, `id`, `name`, `class`, `type`; never text or value); path with query and fragment removed; referrer reduced to a hostname; password fields ignored; the worker's page-message validation (NFR-4) rejecting unknown event names, sources, and extra fields; and a serialized page-view/click event containing no full URL, query string, title, text, or value (NFR-1) |
+| 5 | Tab activation, closing, restricted hosts, dwell time stored in `chrome.storage.session` (`FR-5.1-5.3`), and the serial queue for tab/window state updates (Issue #3); tests for dwell calculation, restricted flags, and the queue written the same day | Switch between tabs and close one; show host-only events and dwell time; restricted pages have no hostname; tests cover dwell calculation, closing an unseen tab, and two events arriving together |
+| 6 | Mentor checkpoint and resilience: surviving a worker restart (`FR-5.6`, moved from day 5, Issue #7), extension reload (`FR-3.3`, `NFR-6`), failed sends (`FR-4.5`), and console errors (`NFR-5`) | Review progress with mentor; document changes; stop the service worker by hand while a tab is active, switch tabs, and show a correct `previousDwellMs`; reload the extension while a test page is open without repeated console errors; confirm operation resumes after refresh |
 | 7 | Scroll and typing bursts, browser focus, and short-tab filtering (`FR-2.5-2.6`, `FR-5.5`, `FR-5.7`) | Show one grouped scroll event per completed scroll, a typing-burst event with counts only, and dwell time pausing outside Chrome; ignore tabs active for less than 300 ms; unit tests cover grouping, focus, and filtering |
 | 8 | Popup and collector summaries (`FR-6.1-6.4`, `FR-7.4`); domain-setting validation (`FR-1.6`) | Save, list, and delete a per-domain site key; invalid key shows an error; events use the domain override; collector keeps running totals of all events (not just the latest 200), serves them at `GET /summary`, and the dashboard displays event counts and dwell totals |
 | 9 | Stabilization and complete demo rehearsal | Run the full demo flow, required tests, and checks for privacy leaks; complete the README and list any skipped Should items as known issues |
@@ -69,8 +69,18 @@ GitHub repository and share the latest commit with the mentor.
    main architecture early.
 3. **Tab state and dwell time:** Add the most stateful behavior once event
    delivery works; persist state and unit-test calculations independently.
+   Day 5 is the hardest day, so it only builds the tab logic. Dwell state is
+   kept in `chrome.storage.session` from the start (the design requires it),
+   so surviving a worker restart (FR-5.6) needs no extra code on day 5; it is
+   proven on day 6.
+   **If day 5 runs over:** finish tab activation, closing, and dwell time
+   first, because the demo depends on them. Restricted-host edge cases and
+   the serial-queue test move to the morning of day 6, before the check-in.
+   If that still is not enough, the day 7 Should items move back and are cut
+   in the order listed in section 5.
 4. **Reload/error handling:** Exercise worker and collector failures before
-   adding optional tracking, so the core demo remains dependable.
+   adding optional tracking, so the core demo remains dependable. Day 6 also
+   proves FR-5.6 by stopping the service worker by hand during a tab dwell.
 5. **Optional Should features and finish:** Add planned extras only after all
    Must requirements and their tests pass. Reserve the last build day for
    stabilization and documentation.
@@ -78,6 +88,13 @@ GitHub repository and share the latest commit with the mentor.
 ## 4. Testing and acceptance checks
 
 - Run `npm test` without opening a browser. Use Node's built-in test runner.
+- Write each shared module's tests on the same day as the module, starting
+  with the day 4 tests for `shared/events.js` (see the day 4 row). Day 9 is
+  for edge cases and cleanup, not for writing the first tests.
+- Manual FR-5.6 check on day 6: with a tab active, stop the service worker
+  from `chrome://serviceworker-internals` (or wait past 30 seconds idle),
+  then switch tabs and confirm `previousDwellMs` includes the time before the
+  restart.
 - Test hostname parsing for `https://`, `http://`, `chrome://`, empty input,
   and random text.
 - Test dwell time across tab switches, and confirm closing an unseen tab does
