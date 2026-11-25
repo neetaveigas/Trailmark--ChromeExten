@@ -43,7 +43,7 @@ small commits and push progress to the repository at least daily.
 | --- | --- | --- |
 | 3 | Build pipeline and settings (`FR-1.1-1.5`); local collector and manual test page (`FR-7.1-7.3`); initial pure unit tests | `npm run build` creates a loadable `dist/`; `npm run collector` serves `http://localhost:4317/` and `/test`; valid event POST succeeds and invalid POST returns 400; `npm test` runs |
 | 4 | Page view/click tracking and safe message flow (`FR-2.1-2.4`, `FR-3.1-3.2`, `FR-4.1-4.4`, `NFR-1,3-5`) | A page on an allowed host produces page-view and click events in the collector; no element text/value or password data is sent; common fields are present |
-| 5 | Tab activation, closing, restricted hosts, and restart-safe dwell time (`FR-5.1-5.3`, `FR-5.6`) | Switch between tabs and close one; show host-only events and dwell time; restricted pages have no hostname; tests cover dwell calculation and closing an unseen tab |
+| 5 | Tab activation, closing, restricted hosts, restart-safe dwell time (`FR-5.1-5.3`, `FR-5.6`), and the serial queue for tab/window state updates (Issue #3) | Switch between tabs and close one; show host-only events and dwell time; restricted pages have no hostname; tests cover dwell calculation, closing an unseen tab, and two events arriving together |
 | 6 | Mentor checkpoint and resilience (`FR-3.3`, `FR-4.5`, `NFR-5,6`) | Review progress with mentor; document changes; reload the extension while a test page is open without repeated console errors; confirm operation resumes after refresh |
 | 7 | Scroll and typing bursts, browser focus, and short-tab filtering (`FR-2.5-2.6`, `FR-5.5`, `FR-5.7`) | Show one grouped scroll event per completed scroll, a typing-burst event with counts only, and dwell time pausing outside Chrome; ignore tabs active for less than 300 ms; unit tests cover grouping, focus, and filtering |
 | 8 | Popup and collector summaries (`FR-6.1-6.4`, `FR-7.4`); domain-setting validation (`FR-1.6`) | Save, list, and delete a per-domain site key; invalid key shows an error; events use the domain override; collector displays event counts and dwell totals |
@@ -82,6 +82,11 @@ GitHub repository and share the latest commit with the mentor.
   and random text.
 - Test dwell time across tab switches, and confirm closing an unseen tab does
   not throw.
+- Test the serial queue (Issue #3): start two handlers at the same moment,
+  such as a tab activation and a window focus change, against a fake async
+  storage with a delay. Both updates must survive, the dwell time must be
+  correct, and tasks must run in arrival order. A task that throws must not
+  stop the next one from running.
 - Check serialized events contain no full URL, query string, tab title, page
   text, input value, key value, or password data.
 - Add unit tests for every Should feature implemented, including pause/resume

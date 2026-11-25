@@ -64,6 +64,7 @@ extension/
   shared/
     events.js
     tracking-logic.js
+    serial-queue.js
 collector/
   server.js
   page.js
@@ -71,6 +72,7 @@ collector/
 test/
   events.test.js
   tracking-logic.test.js
+  serial-queue.test.js
   collector.test.js
 ```
 
@@ -80,7 +82,8 @@ The exact file names can change if implementation shows a simpler layout;
 record any agreed change below.
 
 Pure functions in `extension/shared/` will handle URL-to-hostname parsing,
-event validation, dwell-time calculations, and scroll/typing burst grouping.
+event validation, dwell-time calculations, scroll/typing burst grouping, and
+the serial queue that processes tab/window events one at a time (section 5).
 The Node built-in test runner can test these modules without Chrome. Browser
 API wiring stays in the service worker and content script; collector request
 handling is tested through Node's HTTP interface.
@@ -118,8 +121,10 @@ three runtimes as follows:
    `"type": "module"` causes `importScripts()` to throw a fatal error and prevents the
    service worker from starting. At its top level, it loads shared scripts synchronously:
    ```javascript
-   importScripts('shared/events.js', 'shared/tracking-logic.js');
+   importScripts('shared/events.js', 'shared/tracking-logic.js', 'shared/serial-queue.js');
    ```
+   (`serial-queue.js` has no dependencies and is only needed by the worker, so
+   it is not listed in the content script's `js` array.)
    This ensures synchronous availability of all shared helpers upon worker
    startup and wake-up events.
 
@@ -265,6 +270,84 @@ sleep. State is partitioned across `chrome.storage.local` and
      Time is not counted while Chrome is completely closed because the session storage
      clears.
 
+### Processing tab and window events one at a time (Resolving Issue #3)
+
+Every tab/window handler does a read-modify-write on the saved dwell state:
+read it from `chrome.storage.session`, change it, and write it back. Storage
+calls are asynchronous, so two events that arrive close together can overlap
+and one update can silently overwrite the other:
+
+1. `onActivated` reads the state.
+2. `onFocusChanged` reads the same state.
+3. `onActivated` writes its change.
+4. `onFocusChanged` writes its change, overwriting step 3.
+
+Switching tabs and switching windows often fire together, so this would
+produce wrong dwell times in practice.
+
+**Fix: a single promise queue for all state-changing handlers.** A small pure
+helper, `createSerialQueue()` in `extension/shared/serial-queue.js`, chains
+each task onto the previous one so only one handler works on the state at a
+time:
+
+```javascript
+function createSerialQueue() {
+  let tail = Promise.resolve();
+  return {
+    run(task) {
+      const result = tail.then(task);
+      // Keep the chain alive even if a task fails, so one error
+      // never blocks later events.
+      tail = result.catch(() => {});
+      return result;
+    },
+  };
+}
+```
+
+The service worker creates one queue and routes every tab/window listener
+through it. Listeners are still registered synchronously at the top level
+(FR-4.4); only their bodies are queued:
+
+```javascript
+const stateQueue = TrailmarkQueue.createSerialQueue();
+
+chrome.tabs.onActivated.addListener((info) => {
+  stateQueue.run(() => handleTabActivated(info)).catch(logError);
+});
+chrome.tabs.onRemoved.addListener((tabId, info) => {
+  stateQueue.run(() => handleTabClosed(tabId, info)).catch(logError);
+});
+chrome.windows.onFocusChanged.addListener((windowId) => {
+  stateQueue.run(() => handleFocusChanged(windowId)).catch(logError);
+});
+```
+
+Rules that keep this correct:
+
+- **The whole read-modify-write happens inside one queued task.** A handler
+  reads state, computes the new state, and finishes writing before the next
+  task starts. No handler reads or writes dwell state outside the queue.
+- **The dwell calculation stays pure.** Each handler calls a pure function in
+  `tracking-logic.js` with the shape `(state, event, nowMs) -> { state, eventsToSend }`.
+  The queued task only does the storage I/O around it, so the logic is tested
+  in Node without Chrome.
+- **Sending events does not block the queue.** The task persists the new state
+  first, then hands the resulting events to the sender without awaiting the
+  network. A slow or failed collector POST (FR-4.5) cannot delay the next tab
+  event.
+- **Failures are isolated.** A task that throws is logged and the queue moves
+  on to the next task (`tail` swallows the rejection; the caller still sees
+  and logs it).
+- **Worker restarts.** The queue is a worker-lifetime variable, like
+  `sessionIdPromise`. When the worker stops it is cleared, and the next event
+  starts a fresh queue that reads the persisted state from
+  `chrome.storage.session`. Storage, not memory, stays the source of truth.
+
+The `browserSessionId` fix above uses the same principle for a one-time
+initialization (a cached promise); the queue covers the repeated
+read-modify-write of tab and dwell state.
+
 All Chrome event listeners are registered synchronously at the top level of the
 service worker. Listener handlers read and update persisted storage rather than
 relying on in-memory variables. A tab never observed before can be closed safely;
@@ -346,8 +429,9 @@ the collector uses Node built-ins only.
 - **Sensitive-looking element attributes:** Send only the explicitly required
   click attributes, never free-form page text or values. Verify event output
   manually and in unit tests.
-- **Service worker timing/storage races:** Keep listeners top-level, serialize
-  state updates, and test a worker restart during tab dwell.
+- **Service worker timing/storage races:** Keep listeners top-level, run every
+  tab/window state update through the serial queue (section 5), and test both
+  simultaneous events and a worker restart during tab dwell.
 - **Extension reload with an open page:** Validate message shape and handle a
   missing receiver without repeated logging; refresh the page to reconnect.
 - **Schedule pressure:** Preserve every Must requirement and required test.
@@ -362,6 +446,7 @@ the collector uses Node built-ins only.
 | Day 1 | Omit page titles unless the mentor resolves the FR-2.2 / NFR-1 conflict. | Always send the page title. | Pending mentor decision; privacy-safe default. |
 | Day 1 | Load shared code without a bundler via ordered `content_scripts.js` array in manifest, service worker `importScripts`, and universal export wrapper (`globalThis`/CommonJS) for Node tests (resolving Issue #1). | Build-time script concatenation (`build.js` bundle) or ES modules with bundler. | Proposed; satisfies Chrome's content script module limitation cleanly without introducing bundler dependencies or build artifacts complexity. |
 | Day 1 | Store `browserSessionId` in `chrome.storage.session`, lazily initialized on first access using a promise-cached pattern to prevent race conditions when multiple listeners fire at startup (resolving Issue #2). | Keep `browserSessionId` in service worker memory or persist in `local`. | Proposed; worker restarts do not fragment sessions into multiple IDs, and quitting the browser clears the session cleanly. |
+| Day 2 | Process all tab/window state updates one at a time through a single promise queue (`createSerialQueue()` in `extension/shared/serial-queue.js`); each queued task does the full read-modify-write of dwell state, and collector sends are not awaited inside the queue (resolving Issue #3). | Independent async handlers (lost updates when `onActivated` and `onFocusChanged` overlap); a storage-level lock or version counter with retries. | Proposed; simplest way to prevent overlapping read-modify-write, keeps the dwell logic pure and testable, and one failed handler cannot block later events. |
 
 Do not begin feature implementation until the mentor has reviewed and approved
 the design and plan.
