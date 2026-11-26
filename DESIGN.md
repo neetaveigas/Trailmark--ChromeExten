@@ -442,6 +442,18 @@ Every event sent to the collector has these common fields:
 | `sentAt` | Time the service worker sends the event |
 | `source` | `page` for page events; `worker` for browser/tab events |
 
+**Page events also carry `hostname`.** Every event with `source: "page"`
+(`tmPageView`, `tmClick`, `tmScroll`, `tmTypingBurst`) includes:
+
+| Field | Meaning |
+| --- | --- |
+| `hostname` | Hostname of the page the event happened on, such as `example.com` (from `location.hostname` in the content script). Never the full address, path, query string, or fragment. |
+
+Without it, a page view with only `path: "/settings"` could belong to any
+website. The dashboard shows it in its hostname column, and the per-site key
+(FR-6.4) is chosen by it. Worker events carry their own tab hostnames as
+described in the table below.
+
 Planned event-specific fields:
 
 | Event | Additional fields |
@@ -873,6 +885,7 @@ the collector uses Node built-ins only.
 | Day 2 | Correction from mentor review (Issue #5; also Issue #6): the collector keeps running totals (count per event type, dwell per hostname) separate from the 200-event list, updated once per valid event with the pure `addToSummary(summary, event)` in `summary.js`, and served as JSON from `GET /summary`, which the dashboard renders with `textContent`. | Compute the summary in the browser from the latest 200 events (earlier draft), which undercounts once older events are dropped. | Pending mentor review; FR-7.4 totals include every event, and the counting logic is a pure function tested in Node. |
 | Day 2 | Smaller fixes from the design review (Issue #6): `tmTabActivated` carries separate `restricted` (new tab) and `previousRestricted` (previous tab) flags; dwell state lives only in `chrome.storage.session` with no `chrome.storage.local` fallback; no event has a `timestamp` field (`collectedAt` covers it); `build.js` copies `extension/shared/` to `dist/shared/` and checks every manifest file exists; the popup loads `shared/events.js` with an external `<script>` tag before `popup.js` and uses the shared `isValidSiteKey()`. | One shared `restricted` flag; falling back to local storage; a separate `timestamp`; a popup with its own copy of the site-key check. | Pending mentor review; the collector can tell which tab was hidden, stale dwell state cannot survive a browser restart, the extension loads from `dist/`, and the popup and worker validate site keys the same way. |
 | Day 2 | Move the collector to its own repository, `trailmark-collector` (Issue #8). Section 4 becomes the versioned contract between the repositories (event fields plus the collector's HTTP interface), checked by an identical `contract-examples.json` in both test suites. This repository's `npm run collector` starts the collector from `../trailmark-collector`. | Keep the collector in this repository under `collector/`; publish the contract as a shared npm package. | Pending mentor review; the two parts run in different places and change for different reasons, the contract becomes explicit, and no shared package or extra dependency is needed. |
+| Day 2 | Correction from mentor review (Issue #8): every page event (`source: "page"`: `tmPageView`, `tmClick`, `tmScroll`, `tmTypingBurst`) carries `hostname`, the page's hostname only. Added to section 4, to both copies of `contract-examples.json`, and to the collector README. `contractVersion` stays 1 because nothing has been built against it yet. | Leave page events without a hostname (a path alone cannot say which website it belongs to). | Requested by mentor; the collector and dashboard can tell which website each page event came from, and NFR-1 still holds because only the hostname is sent. |
 
 Do not begin feature implementation until the mentor has reviewed and approved
 the design and plan.

@@ -158,7 +158,8 @@ built-in test runner. Each repository's tests run on their own.
 - Add unit tests for every Should feature implemented, including pause/resume
   dwell behavior if browser blur/focus is included.
 - Contract check (Issue #8): the events the extension builds for each event
-  type match `test/fixtures/contract-examples.json`.
+  type match `test/fixtures/contract-examples.json`, including `hostname`
+  (hostname only) on every page event.
 
 ### Collector repository (`npm test` in `trailmark-collector`)
 
