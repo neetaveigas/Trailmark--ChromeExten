@@ -60,7 +60,7 @@ day and noted in the Decisions log.
 
 | Day | Work and requirements | Demonstrable result |
 | --- | --- | --- |
-| 3 | **Extension repo:** build pipeline and settings (`FR-1.1-1.5`), including the collector host permission on every tenant build (Issue #4); initial pure unit tests. **Collector repo:** set up `trailmark-collector` with its own `package.json`, `README.md` (install/start, endpoints, expected event fields), server, dashboard, and manual test page (`FR-7.1-7.3`); first collector tests; shared contract example events in both repos | Extension: `npm run build` creates a loadable `dist/` whose `host_permissions` includes `http://localhost:4317/*` even with a short `allowedDomains` list; `npm test` runs. Collector: `npm start` in `trailmark-collector` (or `npm run collector` from the extension repo) serves the static dashboard at `http://localhost:4317/` (table built in the browser from `GET /events`, Issue #5) and `/test`; valid event POST succeeds, invalid POST returns 400, and a non-JSON `Content-Type` returns 415; its `npm test` runs |
+| 3 | **Extension repo:** build pipeline and settings (`FR-1.1-1.5`), with `allowedDomains` validation in the three approved forms (#9, #10), including the collector host permission on every tenant build (Issue #4); initial pure unit tests. **Collector repo:** set up `trailmark-collector` with its own `package.json`, `README.md` (install/start, endpoints, expected event fields), server, dashboard, and manual test page (`FR-7.1-7.3`); first collector tests; shared contract example events in both repos | Extension: `npm run build` creates a loadable `dist/` whose `host_permissions` includes `http://localhost:4317/*` even with a short `allowedDomains` list; `npm test` runs. Collector: `npm start` in `trailmark-collector` (or `npm run collector` from the extension repo) serves the static dashboard at `http://localhost:4317/` (table built in the browser from `GET /events`, Issue #5) and `/test`; valid event POST succeeds, invalid POST returns 400, and a non-JSON `Content-Type` returns 415; its `npm test` runs |
 | 4 | Page view/click tracking and safe message flow (`FR-2.1-2.4`, `FR-3.1-3.2`, `FR-4.1-4.4`, `NFR-1,3-5`); unit tests for that day's shared logic in `shared/events.js`, written the same day (Issue #7) | A page on an allowed host produces page-view and click events in the collector; no element text/value or password data is sent; common fields are present. `npm test` passes for: the click-field whitelist (only tag, `id`, `name`, `class`, `type`; never text or value); path with query and fragment removed; referrer reduced to a hostname; password fields ignored; the worker's page-message validation (NFR-4) rejecting unknown event names, sources, and extra fields; and a serialized page-view/click event containing no full URL, query string, title, text, or value (NFR-1) |
 | 5 | Tab activation, closing, restricted hosts, dwell time stored in `chrome.storage.session` (`FR-5.1-5.3`), and the serial queue for tab/window state updates (Issue #3); tests for dwell calculation, restricted flags, and the queue written the same day | Switch between tabs and close one; show host-only events and dwell time; restricted pages have no hostname; tests cover dwell calculation, closing an unseen tab, and two events arriving together |
 | 6 | Mentor checkpoint and resilience: surviving a worker restart (`FR-5.6`, moved from day 5, Issue #7), extension reload (`FR-3.3`, `NFR-6`), failed sends (`FR-4.5`), and console errors (`NFR-5`) | Review progress with mentor; document changes; stop the service worker by hand while a tab is active, switch tabs, and show a correct `previousDwellMs`; reload the extension while a test page is open without repeated console errors; confirm operation resumes after refresh |
@@ -145,6 +145,18 @@ built-in test runner. Each repository's tests run on their own.
   `["*"]`, `host_permissions` contains `http://localhost:4317/*` exactly once,
   and the content script's `matches` never contains it. The `allowedDomains`
   entries in `host_permissions` and `matches` are identical.
+- Test `allowedDomains` validation (mentor decision in #9; day 3, #10) with
+  the pure `toMatchPattern()` and list check in `scripts/build.js`:
+  - Accepted: `example.com` -> `*://example.com/*`; `*.example.com` ->
+    `*://*.example.com/*`; `["*"]` -> `*://*/*`; `localhost` ->
+    `*://localhost/*`.
+  - Rejected with a clear error naming the entry: `https://example.com`
+    (scheme), `example.com/home` (path), `example.com:8080` (port),
+    `ex*mple.com`, `shop.*.com` and `*example.com` (`*` in the wrong place),
+    `""` (empty string), `[]` (empty list), `["*", "example.com"]` (`*`
+    not alone), and `Example.com` (uppercase).
+  - `npm run build` exits with a non-zero code and writes no `dist/` when any
+    entry is rejected.
 - Test the build output (Issue #6): after `npm run build`, `dist/shared/`
   contains `events.js`, `tracking-logic.js`, and `serial-queue.js`; every file
   the manifest refers to exists in `dist/`; and a missing file stops the

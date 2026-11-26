@@ -458,7 +458,7 @@ Planned event-specific fields:
 
 | Event | Additional fields |
 | --- | --- |
-| `tmPageView` | `path` (no query or fragment); `referrerHostname` (hostname only; omitted when there is no referrer). The required page-title field is on hold pending the privacy decision in section 8. |
+| `tmPageView` | `path` (no query or fragment); `referrerHostname` (hostname only; omitted when there is no referrer). No page title: the mentor decided in #9 that NFR-1 wins over FR-2.2 (titles often contain private text). |
 | `tmClick` | `tag`, `id`, `name`, `class`, and `type` of the clicked element (each omitted when empty); never text or value |
 | `tmScroll` (Should) | `direction` (`up` or `down`), `duration` (ms), `startPosition` and `endPosition` (px); close a burst after 150 ms without scrolling or when direction changes |
 | `tmTypingBurst` (Should) | `keyCount` and `duration` (ms) only; group key presses less than 1 second apart; never key values |
@@ -714,24 +714,62 @@ arrive.
   exported from `scripts/build.js`, so it is unit-tested in Node without
   running a build.
 
-Example output for a tenant with a short domain list:
+Example output for a tenant with
+`"allowedDomains": ["shop.example.com", "*.example.org"]`:
 
 ```json
 "host_permissions": [
-  "*://example.com/*",
-  "*://*.example.com/*",
+  "*://shop.example.com/*",
+  "*://*.example.org/*",
   "http://localhost:4317/*"
 ],
 "content_scripts": [
   {
-    "matches": ["*://example.com/*", "*://*.example.com/*"],
+    "matches": ["*://shop.example.com/*", "*://*.example.org/*"],
     "js": ["shared/events.js", "shared/tracking-logic.js", "content.js"]
   }
 ]
 ```
 
-(The exact patterns generated for each `allowedDomains` entry depend on the
-domain syntax still to be confirmed in open question 2, section 8.)
+### `allowedDomains` format and build validation (mentor decision, Issue #9)
+
+The build accepts **exactly three forms** of entry. Each maps to one Chrome
+match pattern, used in both `host_permissions` and `matches`:
+
+| Entry | Meaning | Match pattern |
+| --- | --- | --- |
+| `example.com` | That hostname only | `*://example.com/*` |
+| `*.example.com` | `example.com` **and** any of its subdomains (Chrome's `*.` host wildcard matches the bare domain too) | `*://*.example.com/*` |
+| `*` (written as `["*"]`) | Every site; it must be the **only** entry in the list | `*://*/*` |
+
+A hostname is one or more labels separated by dots. Each label has 1 to 63
+lowercase letters, digits, or hyphens, and does not start or end with a
+hyphen. `localhost` is a valid hostname, so the demo tenant can list it for
+the `/test` page; Chrome's `*://localhost/*` pattern matches every port.
+
+**Anything else stops `npm run build` with a clear error** that names the
+bad entry and says why it was rejected. That includes:
+
+- a scheme: `https://example.com`
+- a path: `example.com/home`
+- a port: `example.com:8080`
+- a `*` anywhere except a leading `*.`: `ex*mple.com`, `shop.*.com`,
+  `*example.com`
+- an empty string, or an empty `allowedDomains` list
+- `*` together with any other entry: `["*", "example.com"]`
+- uppercase letters, spaces, or other characters not allowed in a hostname
+
+The check is a pure function in `scripts/build.js`
+(`toMatchPattern(entry)`, plus a list-level check for `*` and empty lists),
+so it is unit-tested in Node without running a build (`PLAN.md` section 4,
+day 3, issue #10).
+
+**Note on FR-1.6.** The requirements document lists "`*.` at the start" as an
+example of a wrongly written domain. The mentor decided in #9 that
+`*.example.com` is a supported form (meaning the domain and its subdomains),
+and that this decision overrides that example. Only a `*` that is not
+followed by `.` and a valid hostname, or that appears anywhere other than the
+start, is rejected.
 
 **Alternative rejected: CORS headers on the collector.** The collector will
 **not** send `Access-Control-Allow-Origin` headers and will not answer
@@ -780,8 +818,9 @@ The service worker is registered in `manifest.json` as a classic script:
 - **NFR-1:** Whitelist event fields instead of copying page or browser objects.
   Remove query strings and fragments from paths; reduce referrers and tab
   addresses to hostnames. Never read element text, input values, clipboard
-  contents, or key values. Do not attach title fields unless the mentor
-  resolves the conflict in section 8.
+  contents, or key values. Never send page or tab titles: the mentor decided
+  in #9 that NFR-1 wins over FR-2.2, because titles often contain private
+  text such as an email subject or a document name.
 - **NFR-2:** The final README will include a "What Trailmark collects" table
   listing every event and each field.
 - **NFR-3:** Do not use `eval`, `new Function`, or `innerHTML` with event data.
@@ -814,29 +853,33 @@ the collector uses Node built-ins only.
 
 ### Open questions for the mentor
 
-1. **Page title/privacy conflict:** FR-2.2 asks for a page title, but NFR-1
-   prohibits text from the page and tab titles. The privacy-safe default is to
-   omit titles. Ask the mentor whether a title is an approved exception before
-   coding; do not silently collect it.
-2. **Domain pattern syntax:** Confirm the expected forms for `allowedDomains`,
-   especially wildcard domains and the special value `["*"]`, before writing
-   validation.
-3. **Day 1 repository:** Create a GitHub repository and send its link to
-   `@Jesudas Lobo` on Slack as required. Confirm whether the mentor expects a
-   different schedule if the work is part-time.
+All five questions are resolved.
+
+1. **Page title/privacy conflict:** *Resolved by mentor (#9).* FR-2.2 asks
+   for a page title, but NFR-1 prohibits text from the page and tab titles.
+   Decision: leave page titles out. Titles often contain private text (an
+   email subject, a document name), so NFR-1 wins over FR-2.2. `tmPageView`
+   stays as defined in section 4. The mentor will correct FR-2.2 in the
+   requirements document.
+2. **Domain pattern syntax:** *Resolved by mentor (#9).* `allowedDomains`
+   supports exactly `example.com`, `*.example.com` (the domain and its
+   subdomains), and `["*"]` (every site, only entry). Anything else fails the
+   build with a clear error. See section 6, "`allowedDomains` format and build
+   validation".
+3. **Day 1 repository:** *Resolved (#9).* The repository exists and was
+   shared with the mentor, and so was `trailmark-collector` (#8).
 4. **Collector access approach (Issue #4):** *Resolved by mentor.* Approved
    once the `Content-Type` rule was added: always add
    `http://localhost:4317/*` to `host_permissions` (never to `matches`), send
    no CORS headers, and reject any non-JSON `POST /events` with `415`. See
    section 6 and the Decisions log.
-5. **Tracking the local test page:** *Resolved by mentor for now.* The manual
+5. **Tracking the local test page:** *Resolved by mentor.* The manual
    test page is served at `http://localhost:4317/test`, so the demo tenant
    needs `localhost` in `allowedDomains`, which also injects the content
    script into the collector's own dashboard at `/`. Agreed default: the
    content script sends nothing on the collector origin except on the `/test`
-   path. Revisit when the collector moves to its own repository (Issue #8).
-   *Revisited for Issue #8:* moving the collector code to its own repository
-   does not change where it runs. It is still served from
+   path. This was checked when the collector moved to its own repository
+   (#8): moving the code does not change where it runs. It is still served from
    `http://localhost:4317`, with the dashboard at `/` and the test page at
    `/test`, so the agreed default still applies unchanged.
 
@@ -872,20 +915,21 @@ the collector uses Node built-ins only.
 
 | Date | Decision | Alternative considered | Status / reason |
 | --- | --- | --- | --- |
-| Day 1 | Use Manifest V3, plain JavaScript, Node built-ins, and a local-only collector. | Framework, remote collector, or third-party analytics. | Proposed; matches technical rules and keeps data local. |
-| Day 1 | Keep tab/session state in `chrome.storage.session` and the stable install ID in `chrome.storage.local`. | Keep state only in worker variables or persist all state permanently. | Proposed; worker restarts do not lose active dwell state, and closed-browser time is not counted. |
-| Day 1 | Omit page titles unless the mentor resolves the FR-2.2 / NFR-1 conflict. | Always send the page title. | Pending mentor decision; privacy-safe default. |
-| Day 1 | Load shared code without a bundler via ordered `content_scripts.js` array in manifest, service worker `importScripts`, and universal export wrapper (`globalThis`/CommonJS) for Node tests (resolving Issue #1). | Build-time script concatenation (`build.js` bundle) or ES modules with bundler. | Proposed; satisfies Chrome's content script module limitation cleanly without introducing bundler dependencies or build artifacts complexity. |
-| Day 1 | Store `browserSessionId` in `chrome.storage.session`, lazily initialized on first access using a promise-cached pattern to prevent race conditions when multiple listeners fire at startup (resolving Issue #2). | Keep `browserSessionId` in service worker memory or persist in `local`. | Proposed; worker restarts do not fragment sessions into multiple IDs, and quitting the browser clears the session cleanly. |
-| Day 2 | Process all tab/window state updates one at a time through a single promise queue (`createSerialQueue()` in `extension/shared/serial-queue.js`); each queued task does the full read-modify-write of dwell state, and collector sends are not awaited inside the queue (resolving Issue #3). | Independent async handlers (lost updates when `onActivated` and `onFocusChanged` overlap); a storage-level lock or version counter with retries. | Proposed; simplest way to prevent overlapping read-modify-write, keeps the dwell logic pure and testable, and one failed handler cannot block later events. |
+| Day 1 | Use Manifest V3, plain JavaScript, Node built-ins, and a local-only collector. | Framework, remote collector, or third-party analytics. | Approved by mentor (#9); matches technical rules and keeps data local. |
+| Day 1 | Keep tab/session state in `chrome.storage.session` and the stable install ID in `chrome.storage.local`. | Keep state only in worker variables or persist all state permanently. | Approved by mentor (#9); worker restarts do not lose active dwell state, and closed-browser time is not counted. |
+| Day 1 | Omit page titles: the FR-2.2 / NFR-1 conflict is resolved in favour of NFR-1. | Always send the page title. | Approved by mentor (#9); titles often contain private text such as an email subject or a document name. The mentor will correct FR-2.2 in the requirements document. |
+| Day 1 | Load shared code without a bundler via ordered `content_scripts.js` array in manifest, service worker `importScripts`, and universal export wrapper (`globalThis`/CommonJS) for Node tests (resolving Issue #1). | Build-time script concatenation (`build.js` bundle) or ES modules with bundler. | Approved by mentor (#9); satisfies Chrome's content script module limitation cleanly without introducing bundler dependencies or build artifacts complexity. |
+| Day 1 | Store `browserSessionId` in `chrome.storage.session`, lazily initialized on first access using a promise-cached pattern to prevent race conditions when multiple listeners fire at startup (resolving Issue #2). | Keep `browserSessionId` in service worker memory or persist in `local`. | Approved by mentor (#9); worker restarts do not fragment sessions into multiple IDs, and quitting the browser clears the session cleanly. |
+| Day 2 | Process all tab/window state updates one at a time through a single promise queue (`createSerialQueue()` in `extension/shared/serial-queue.js`); each queued task does the full read-modify-write of dwell state, and collector sends are not awaited inside the queue (resolving Issue #3). | Independent async handlers (lost updates when `onActivated` and `onFocusChanged` overlap); a storage-level lock or version counter with retries. | Approved by mentor (#9); simplest way to prevent overlapping read-modify-write, keeps the dwell logic pure and testable, and one failed handler cannot block later events. |
 | Day 2 | The build always adds `http://localhost:4317/*` to `host_permissions` (never to content-script `matches`), for every tenant including `["*"]`; the collector sends no CORS headers (addressing Issue #4). | Collector sends `Access-Control-Allow-Origin` and answers `OPTIONS`; rely on `*://*/*` covering localhost. | Approved by mentor in the Issue #4 review, conditional on the `Content-Type` rule below; works for tenants with short domain lists and needs no CORS support in the collector. |
 | Day 2 | Correction from mentor review (Issue #4): the collector rejects any `POST /events` whose `Content-Type` is not `application/json` with `415 Unsupported Media Type` and stores nothing. The earlier claim that leaving out CORS headers alone blocks page POSTs was only half true: `text/plain` and form posts are simple requests with no preflight, so the browser still delivers them. | Rely on missing CORS headers alone; check the `Origin` header instead. | Approved by mentor; together with no CORS headers it stops web pages from posting fake events, and the extension already sends `application/json`. |
-| Day 2 | Content script sends nothing on the collector origin except on `/test` (Issue #4, open question 5). | Serve the test page from a separate port. | Approved by mentor for now; revisit when the collector moves to its own repository (Issue #8). |
+| Day 2 | Content script sends nothing on the collector origin except on `/test` (Issue #4, open question 5). | Serve the test page from a separate port. | Approved by mentor (#4). |
 | Day 2 | Build the collector dashboard table in the browser: `server.js` serves a static `dashboard.html` and returns the latest 200 events as JSON from `GET /events`; `dashboard.js` builds rows with `createElement` and `textContent`; pure formatting lives in `dashboard-format.js`; dashboard served with `Content-Security-Policy: default-src 'self'` and `X-Content-Type-Options: nosniff` (Issue #5). | Generate the HTML in Node and escape `& < > " '` in every value; the earlier draft's server-side `textContent` (not possible in Node). | Approved by mentor in the Issue #5 review, conditional on the running-totals change below; values are plain text by construction (NFR-3), formatting stays testable in Node, and the CSP blocks inline script even if markup slips through. |
-| Day 2 | Correction from mentor review (Issue #5; also Issue #6): the collector keeps running totals (count per event type, dwell per hostname) separate from the 200-event list, updated once per valid event with the pure `addToSummary(summary, event)` in `summary.js`, and served as JSON from `GET /summary`, which the dashboard renders with `textContent`. | Compute the summary in the browser from the latest 200 events (earlier draft), which undercounts once older events are dropped. | Pending mentor review; FR-7.4 totals include every event, and the counting logic is a pure function tested in Node. |
-| Day 2 | Smaller fixes from the design review (Issue #6): `tmTabActivated` carries separate `restricted` (new tab) and `previousRestricted` (previous tab) flags; dwell state lives only in `chrome.storage.session` with no `chrome.storage.local` fallback; no event has a `timestamp` field (`collectedAt` covers it); `build.js` copies `extension/shared/` to `dist/shared/` and checks every manifest file exists; the popup loads `shared/events.js` with an external `<script>` tag before `popup.js` and uses the shared `isValidSiteKey()`. | One shared `restricted` flag; falling back to local storage; a separate `timestamp`; a popup with its own copy of the site-key check. | Pending mentor review; the collector can tell which tab was hidden, stale dwell state cannot survive a browser restart, the extension loads from `dist/`, and the popup and worker validate site keys the same way. |
-| Day 2 | Move the collector to its own repository, `trailmark-collector` (Issue #8). Section 4 becomes the versioned contract between the repositories (event fields plus the collector's HTTP interface), checked by an identical `contract-examples.json` in both test suites. This repository's `npm run collector` starts the collector from `../trailmark-collector`. | Keep the collector in this repository under `collector/`; publish the contract as a shared npm package. | Pending mentor review; the two parts run in different places and change for different reasons, the contract becomes explicit, and no shared package or extra dependency is needed. |
-| Day 2 | Correction from mentor review (Issue #8): every page event (`source: "page"`: `tmPageView`, `tmClick`, `tmScroll`, `tmTypingBurst`) carries `hostname`, the page's hostname only. Added to section 4, to both copies of `contract-examples.json`, and to the collector README. `contractVersion` stays 1 because nothing has been built against it yet. | Leave page events without a hostname (a path alone cannot say which website it belongs to). | Requested by mentor; the collector and dashboard can tell which website each page event came from, and NFR-1 still holds because only the hostname is sent. |
+| Day 2 | Correction from mentor review (Issue #5; also Issue #6): the collector keeps running totals (count per event type, dwell per hostname) separate from the 200-event list, updated once per valid event with the pure `addToSummary(summary, event)` in `summary.js`, and served as JSON from `GET /summary`, which the dashboard renders with `textContent`. | Compute the summary in the browser from the latest 200 events (earlier draft), which undercounts once older events are dropped. | Approved by mentor (#9); FR-7.4 totals include every event, and the counting logic is a pure function tested in Node. |
+| Day 2 | Smaller fixes from the design review (Issue #6): `tmTabActivated` carries separate `restricted` (new tab) and `previousRestricted` (previous tab) flags; dwell state lives only in `chrome.storage.session` with no `chrome.storage.local` fallback; no event has a `timestamp` field (`collectedAt` covers it); `build.js` copies `extension/shared/` to `dist/shared/` and checks every manifest file exists; the popup loads `shared/events.js` with an external `<script>` tag before `popup.js` and uses the shared `isValidSiteKey()`. | One shared `restricted` flag; falling back to local storage; a separate `timestamp`; a popup with its own copy of the site-key check. | Approved by mentor (#9); the collector can tell which tab was hidden, stale dwell state cannot survive a browser restart, the extension loads from `dist/`, and the popup and worker validate site keys the same way. |
+| Day 2 | Move the collector to its own repository, `trailmark-collector` (Issue #8). Section 4 becomes the versioned contract between the repositories (event fields plus the collector's HTTP interface), checked by an identical `contract-examples.json` in both test suites. This repository's `npm run collector` starts the collector from `../trailmark-collector`. | Keep the collector in this repository under `collector/`; publish the contract as a shared npm package. | Approved by mentor (#9); the two parts run in different places and change for different reasons, the contract becomes explicit, and no shared package or extra dependency is needed. |
+| Day 2 | Correction from mentor review (Issue #8): every page event (`source: "page"`: `tmPageView`, `tmClick`, `tmScroll`, `tmTypingBurst`) carries `hostname`, the page's hostname only. Added to section 4, to both copies of `contract-examples.json`, and to the collector README. `contractVersion` stays 1 because nothing has been built against it yet. | Leave page events without a hostname (a path alone cannot say which website it belongs to). | Approved by mentor (#9); the collector and dashboard can tell which website each page event came from, and NFR-1 still holds because only the hostname is sent. |
+| Day 2 | `allowedDomains` supports exactly three forms: `example.com` (that hostname), `*.example.com` (the domain and its subdomains), and `["*"]` (every site, only entry). Anything else (scheme, path, port, `*` elsewhere, empty string or list, `*` with other entries) stops `npm run build` with a clear error. Validation is a pure function in `scripts/build.js`, tested on day 3 (#10). | Allow only exact hostnames, as the FR-1.6 example ("`*.` at the start" is wrong) suggests; accept any Chrome match pattern. | Approved by mentor (#9); the mentor's decision overrides the FR-1.6 example, so `*.example.com` is a supported form. |
 
 Do not begin feature implementation until the mentor has reviewed and approved
 the design and plan.
