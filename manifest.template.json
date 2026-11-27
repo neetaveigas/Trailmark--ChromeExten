@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "",
+  "description": "",
+  "version": "",
+  "permissions": ["storage"],
+  "host_permissions": [],
+  "background": {
+    "service_worker": "service-worker.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [],
+      "js": ["shared/events.js", "shared/tracking-logic.js", "content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "Trailmark",
+    "default_popup": "popup.html"
+  }
+}

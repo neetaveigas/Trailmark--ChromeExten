@@ -1,0 +1,7 @@
+{
+  "name": "Trailmark",
+  "description": "Records limited, privacy-safe interaction events and sends them only to a local collector.",
+  "version": "0.1.0",
+  "siteKey": "tmDemoSiteKey_2026-dev",
+  "allowedDomains": ["localhost", "example.com"]
+}
